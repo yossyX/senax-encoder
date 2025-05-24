@@ -19,13 +19,12 @@ A fast, compact, and schema-evolution-friendly binary serialization library for 
 
 You can control encoding/decoding behavior using the following attributes:
 
-- `#[senax(id = N)]` — Assigns a custom field or variant ID (u32 or u8, see below). Ensures stable wire format across versions.
+- `#[senax(id = N)]` — Assigns a custom field or variant ID (u64). Ensures stable wire format across versions.
 - `#[senax(default)]` — If a field is missing during decoding, its value is set to `Default::default()` instead of causing an error. For `Option<T>`, this means `None`.
 - `#[senax(skip_encode)]` — This field is not written during encoding. On decode, it is set to `Default::default()`.
 - `#[senax(skip_decode)]` — This field is ignored during decoding and always set to `Default::default()`. It is still encoded if present.
 - `#[senax(skip_default)]` — This field is not written during encoding if its value equals the default value. On decode, missing fields are set to `Default::default()`.
 - `#[senax(rename = "name")]` — Use the given string as the logical field/variant name for ID calculation. Useful for renaming fields/variants while keeping the same wire format.
-- `#[senax(u8)]` — On structs/enums, encodes field/variant IDs as `u8` instead of `u32` (for compactness, up to 255 IDs; 0 is reserved for terminator).
 
 ## Feature Flags
 
@@ -106,14 +105,14 @@ let value2 = MyStruct::decode(&mut bytes)?;
 ```
 
 ### 3. Schema evolution (adding/removing/changing fields)
-- Field IDs are **automatically generated from field names (CRC32)** by default.
+- Field IDs are **automatically generated from field names (CRC64)** by default.
   - Use `#[senax(id=...)]` only if you need to resolve a collision.
-- Because mapping is by field ID (u32):
+- Because mapping is by field ID (u64):
   - **Old struct → new struct**:
     - New fields of type `Option` become `None` if missing.
     - New required fields without `default` will cause a decode error if missing.
   - **New struct → old struct**: unknown fields are automatically skipped.
-- **No field names are stored, only u32 IDs, so field addition/removal/reordering/type changes are robust.**
+- **No field names are stored, only u64 IDs, so field addition/removal/reordering/type changes are robust.**
 
 ### 4. Feature flags
 - Enable only the types you need: `indexmap`, `chrono`, `rust_decimal`, `uuid`, `ulid`, `serde_json`, etc.

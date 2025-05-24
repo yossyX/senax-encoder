@@ -1,6 +1,6 @@
 extern crate proc_macro;
 
-use crc32fast::Hasher;
+use crc::{Crc, CRC_64_ECMA_182};
 use itertools::izip;
 use proc_macro::TokenStream;
 use proc_macro2::Span;
@@ -11,19 +11,29 @@ use syn::{
     Type,
 };
 
-/// Calculate ID (CRC32) from name
+/// CRC-64 hasher for field name to ID conversion
+const CRC64: Crc<u64> = Crc::<u64>::new(&CRC_64_ECMA_182);
+
+/// Calculate a unique field ID from a field name using CRC-64
 ///
-/// This function computes a CRC32 hash of the given name string and returns it as a u32.
-/// If the computed hash is 0, it returns 1 instead since 0 is reserved as a terminator.
-fn calculate_id_from_name(name: &str) -> u32 {
-    let mut hasher = Hasher::new();
-    hasher.update(name.as_bytes());
-    let id = hasher.finalize();
-    // If ID is 0, replace with 1 (0 is reserved as a terminator)
-    if id == 0 {
-        1
+/// This function generates a deterministic 64-bit ID from a field name by computing
+/// the CRC-64 hash. This ensures consistent field IDs across compilation runs
+/// while providing excellent distribution and minimizing collision probability.
+///
+/// # Arguments
+///
+/// * `name` - The field name to hash
+///
+/// # Returns
+///
+/// A 64-bit field ID (never 0, as 0 is reserved as a terminator)
+fn calculate_id_from_name(name: &str) -> u64 {
+    let crc64_hash = CRC64.checksum(name.as_bytes());
+    // Ensure it's not 0 (0 is reserved as terminator)
+    if crc64_hash == 0 {
+        u64::MAX
     } else {
-        id
+        crc64_hash
     }
 }
 
@@ -43,7 +53,7 @@ fn calculate_id_from_name(name: &str) -> u32 {
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // The rename field is used indirectly in ID calculation
 struct FieldAttributes {
-    id: u32,
+    id: u64,
     default: bool,
     skip_encode: bool,
     skip_decode: bool,
@@ -64,7 +74,7 @@ struct FieldAttributes {
 /// # Returns
 ///
 /// A `FieldAttributes` struct with parsed values. If no explicit ID is provided,
-/// the ID is calculated using CRC32 hash of either the rename value or the field name.
+/// the ID is calculated using CRC64 hash of either the rename value or the field name.
 ///
 /// # Supported Attributes
 ///
@@ -101,7 +111,7 @@ fn get_field_attributes(attrs: &[Attribute], field_name: &str) -> FieldAttribute
                     if ident == "id" {
                         input.parse::<syn::Token![=]>()?;
                         let lit = input.parse::<syn::LitInt>()?;
-                        if let Ok(id_val) = lit.base10_parse::<u32>() {
+                        if let Ok(id_val) = lit.base10_parse::<u64>() {
                             if id_val == 0 {
                                 return Err(syn::Error::new(
                                     lit.span(),
@@ -175,7 +185,7 @@ fn get_field_attributes(attrs: &[Attribute], field_name: &str) -> FieldAttribute
         }
     }
 
-    // ID calculation: Use explicit ID if provided, otherwise calculate CRC32 from rename or field name
+    // ID calculation: Use explicit ID if provided, otherwise calculate CRC64 from rename or field name
     let calculated_id = id.unwrap_or_else(|| {
         let name_for_id = if let Some(ref rename_val) = rename {
             rename_val.as_str()
@@ -234,33 +244,6 @@ fn extract_inner_type_from_option(ty: &Type) -> Option<&Type> {
     None
 }
 
-/// Extract and parse container-level #[senax(...)] attribute values (e.g. #[senax(u8)])
-fn get_container_attributes(attrs: &[Attribute]) -> bool {
-    for attr in attrs {
-        if attr.path().is_ident("senax") {
-            let parsed = attr.parse_args_with(|input: syn::parse::ParseStream| {
-                let mut id_u8 = false;
-                while !input.is_empty() {
-                    let ident = input.parse::<syn::Ident>()?;
-                    if ident == "u8" {
-                        id_u8 = true;
-                    }
-                    if input.peek(syn::Token![,]) {
-                        input.parse::<syn::Token![,]>()?;
-                    }
-                }
-                Ok(id_u8)
-            });
-            if let Ok(id_u8) = parsed {
-                if id_u8 {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
 /// Derive macro for implementing the `Encode` trait
 ///
 /// This procedural macro automatically generates an implementation of the `Encode` trait
@@ -289,7 +272,6 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
-    let container_id_u8 = get_container_attributes(&input.attrs);
 
     let encode_fields = match &input.data {
         Data::Struct(s) => match &s.fields {
@@ -306,7 +288,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                     }
 
                     if !used_ids_struct.insert(field_attrs.id) {
-                        panic!("Field ID (0x{:08X}) is duplicated for struct '{}'. Please specify a different ID for field '{}' using #[senax(id=...)].", field_attrs.id, name, field_name_str);
+                        panic!("Field ID (0x{:016X}) is duplicated for struct '{}'. Please specify a different ID for field '{}' using #[senax(id=...)].", field_attrs.id, name, field_name_str);
                     }
 
                     let field_ident = &f.ident;
@@ -315,80 +297,31 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                     let field_id = field_attrs.id;
 
                     if is_option {
-                        if container_id_u8 {
-                            field_encode.push(quote! {
-                                if let Some(val) = &self.#field_ident {
-                                    let field_id_val: u8 = #field_id as u8;
-                                    writer.put_u8(field_id_val);
-                                    val.encode(writer)?;
-                                }
-                            });
-                        } else {
-                            field_encode.push(quote! {
-                                if let Some(val) = &self.#field_ident {
-                                    let field_id_val: u32 = #field_id;
-                                    if #container_id_u8 {
-                                        writer.put_u8(field_id_val as u8);
-                                    } else {
-                                        senax_encoder::write_u32_le(writer, field_id_val)?;
-                                    }
-                                    val.encode(writer)?;
-                                }
-                            });
-                        }
+                        field_encode.push(quote! {
+                            if let Some(val) = &self.#field_ident {
+                                senax_encoder::write_field_id_optimized(writer, #field_id)?;
+                                val.encode(writer)?;
+                            }
+                        });
                     } else if field_attrs.skip_default {
                         // For skip_default fields, check if the value is default before encoding
-                        if container_id_u8 {
-                            field_encode.push(quote! {
-                                if !self.#field_ident.is_default() {
-                                    let field_id_val: u8 = #field_id as u8;
-                                    writer.put_u8(field_id_val);
-                                    self.#field_ident.encode(writer)?;
-                                }
-                            });
-                        } else {
-                            field_encode.push(quote! {
-                                if !self.#field_ident.is_default() {
-                                    let field_id_val: u32 = #field_id;
-                                    if #container_id_u8 {
-                                        writer.put_u8(field_id_val as u8);
-                                    } else {
-                                        senax_encoder::write_u32_le(writer, field_id_val)?;
-                                    }
-                                    self.#field_ident.encode(writer)?;
-                                }
-                            });
-                        }
-                    } else if container_id_u8 {
                         field_encode.push(quote! {
-                            let field_id_val: u8 = #field_id as u8;
-                            writer.put_u8(field_id_val);
-                            self.#field_ident.encode(writer)?;
+                            if !self.#field_ident.is_default() {
+                                senax_encoder::write_field_id_optimized(writer, #field_id)?;
+                                self.#field_ident.encode(writer)?;
+                            }
                         });
                     } else {
                         field_encode.push(quote! {
-                            let field_id_val: u32 = #field_id;
-                            if #container_id_u8 {
-                                writer.put_u8(field_id_val as u8);
-                            } else {
-                                senax_encoder::write_u32_le(writer, field_id_val)?;
-                            }
+                            senax_encoder::write_field_id_optimized(writer, #field_id)?;
                             self.#field_ident.encode(writer)?;
                         });
                     }
                 }
-                if container_id_u8 {
-                    quote! {
-                        writer.put_u8(senax_encoder::TAG_STRUCT_NAMED);
-                        #(#field_encode)*
-                        writer.put_u8(0);
-                    }
-                } else {
-                    quote! {
-                        writer.put_u8(senax_encoder::TAG_STRUCT_NAMED);
-                        #(#field_encode)*
-                        senax_encoder::write_u32_le(writer, 0)?;
-                    }
+                quote! {
+                    writer.put_u8(senax_encoder::TAG_STRUCT_NAMED);
+                    #(#field_encode)*
+                    senax_encoder::write_field_id_optimized(writer, 0)?;
                 }
             }
             Fields::Unnamed(fields) => {
@@ -420,7 +353,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                 let variant_id = variant_attrs.id;
 
                 if !used_ids_enum.insert(variant_id) {
-                    panic!("Variant ID (0x{:08X}) is duplicated for enum '{}'. Please specify a different ID for variant '{}' using #[senax(id=...)].", variant_id, name, variant_name_str);
+                    panic!("Variant ID (0x{:016X}) is duplicated for enum '{}'. Please specify a different ID for variant '{}' using #[senax(id=...)].", variant_id, name, variant_name_str);
                 }
 
                 let variant_ident = &v.ident;
@@ -443,7 +376,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                             }
 
                             if !used_ids_struct.insert(field_attrs.id) {
-                                panic!("Field ID (0x{:08X}) is duplicated for enum variant '{}'. Please specify a different ID for field '{}' using #[senax(id=...)].", field_attrs.id, variant_ident, field_name_str);
+                                panic!("Field ID (0x{:016X}) is duplicated for enum variant '{}'. Please specify a different ID for field '{}' using #[senax(id=...)].", field_attrs.id, variant_ident, field_name_str);
                             }
                             let field_ident = &f.ident;
                             let ty = &f.ty;
@@ -452,12 +385,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                             if is_option {
                                 field_encode.push(quote! {
                                     if let Some(val) = #field_ident {
-                                        let field_id_val: u32 = #field_id;
-                                        if #container_id_u8 {
-                                            writer.put_u8(field_id_val as u8);
-                                        } else {
-                                            senax_encoder::write_u32_le(writer, field_id_val)?;
-                                        }
+                                        senax_encoder::write_field_id_optimized(writer, #field_id)?;
                                         val.encode(writer)?;
                                     }
                                 });
@@ -465,52 +393,25 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                                 // For skip_default fields, check if the value is default before encoding
                                 field_encode.push(quote! {
                                     if !#field_ident.is_default() {
-                                        let field_id_val: u32 = #field_id;
-                                        if #container_id_u8 {
-                                            writer.put_u8(field_id_val as u8);
-                                        } else {
-                                            senax_encoder::write_u32_le(writer, field_id_val)?;
-                                        }
+                                        senax_encoder::write_field_id_optimized(writer, #field_id)?;
                                         #field_ident.encode(writer)?;
                                     }
                                 });
                             } else {
                                 field_encode.push(quote! {
-                                    let field_id_val: u32 = #field_id;
-                                    if #container_id_u8 {
-                                        writer.put_u8(field_id_val as u8);
-                                    } else {
-                                        senax_encoder::write_u32_le(writer, field_id_val)?;
-                                    }
+                                    senax_encoder::write_field_id_optimized(writer, #field_id)?;
                                     #field_ident.encode(writer)?;
                                 });
                             }
                         }
-                        if container_id_u8 {
-                            variant_encode.push(quote! {
-                                #name::#variant_ident { #(#field_idents),* } => {
-                                    writer.put_u8(senax_encoder::TAG_ENUM_NAMED);
-                                    let variant_id_val: u8 = #variant_id as u8;
-                                    writer.put_u8(variant_id_val);
-                                    #(#field_encode)*
-                                    writer.put_u8(0);
-                                }
-                            });
-                        } else {
-                            variant_encode.push(quote! {
-                                #name::#variant_ident { #(#field_idents),* } => {
-                                    writer.put_u8(senax_encoder::TAG_ENUM_NAMED);
-                                    let variant_id_val: u32 = #variant_id;
-                                    if #container_id_u8 {
-                                        writer.put_u8(variant_id_val as u8);
-                                    } else {
-                                        senax_encoder::write_u32_le(writer, variant_id_val)?;
-                                    }
-                                    #(#field_encode)*
-                                    senax_encoder::write_u32_le(writer, 0)?;
-                                }
-                            });
-                        }
+                        variant_encode.push(quote! {
+                            #name::#variant_ident { #(#field_idents),* } => {
+                                writer.put_u8(senax_encoder::TAG_ENUM_NAMED);
+                                senax_encoder::write_field_id_optimized(writer, #variant_id)?;
+                                #(#field_encode)*
+                                senax_encoder::write_field_id_optimized(writer, 0)?;
+                            }
+                        });
                     }
                     Fields::Unnamed(fields) => {
                         let field_count = fields.unnamed.len();
@@ -521,12 +422,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                         variant_encode.push(quote! {
                             #name::#variant_ident( #(#field_bindings_ref),* ) => {
                                 writer.put_u8(senax_encoder::TAG_ENUM_UNNAMED);
-                                let variant_id_val: u32 = #variant_id;
-                                if #container_id_u8 {
-                                    writer.put_u8(variant_id_val as u8);
-                                } else {
-                                    senax_encoder::write_u32_le(writer, variant_id_val)?;
-                                }
+                                senax_encoder::write_field_id_optimized(writer, #variant_id)?;
                                 let count: usize = #field_count;
                                 count.encode(writer)?;
                                 #(
@@ -539,12 +435,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                         variant_encode.push(quote! {
                             #name::#variant_ident => {
                                 writer.put_u8(senax_encoder::TAG_ENUM);
-                                let variant_id_val: u32 = #variant_id;
-                                if #container_id_u8 {
-                                    writer.put_u8(variant_id_val as u8);
-                                } else {
-                                    senax_encoder::write_u32_le(writer, variant_id_val)?;
-                                }
+                                senax_encoder::write_field_id_optimized(writer, #variant_id)?;
                             }
                         });
                     }
@@ -606,7 +497,6 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
-    let container_id_u8 = get_container_attributes(&input.attrs);
 
     let decode_fields = match &input.data {
         Data::Struct(s) => match &s.fields {
@@ -625,7 +515,7 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                     if let Some(dup_field_name) =
                         used_ids_struct_decode.insert(field_attrs.id, field_name_str.clone())
                     {
-                        panic!("Field ID (0x{:08X}) is duplicated for struct '{}'. Please specify a different ID for field '{}' and '{}' using #[senax(id=...)].", 
+                        panic!("Field ID (0x{:016X}) is duplicated for struct '{}'. Please specify a different ID for field '{}' and '{}' using #[senax(id=...)].", 
                               field_attrs.id, name, dup_field_name, field_name_str);
                     }
 
@@ -726,16 +616,10 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                     let mut field_values = FieldValues::default();
 
                     loop {
-                        let field_id = if #container_id_u8 {
-                            if reader.remaining() == 0 { break; }
-                            let id = reader.get_u8() as u32;
-                            if id == 0 { break; }
-                            id
-                        } else {
-                            let id = senax_encoder::read_u32_le(reader)?;
-                            if id == 0 { break; }
-                            id
-                        };
+                        let field_id = senax_encoder::read_field_id_optimized(reader)?;
+                        if field_id == 0 {
+                            break;
+                        }
                         match field_id {
                             #( #match_arms )*
                             _unknown_id => { senax_encoder::skip_value(reader)?; }
@@ -797,7 +681,7 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                 if let Some(dup_variant) =
                     used_ids_enum_decode.insert(variant_id, variant_name_str.clone())
                 {
-                    panic!("Variant ID (0x{:08X}) is duplicated for enum '{}'. Please specify a different ID for variant '{}' and '{}' using #[senax(id=...)].", 
+                    panic!("Variant ID (0x{:016X}) is duplicated for enum '{}'. Please specify a different ID for variant '{}' and '{}' using #[senax(id=...)].", 
                           variant_id, name, dup_variant, variant_name_str);
                 }
 
@@ -879,13 +763,9 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                                 struct FieldValues { #(#field_value_definitions_enum)* }
                                 let mut field_values = FieldValues::default();
                                 loop {
-                                    let field_id = if #container_id_u8 {
+                                    let field_id = {
                                         if reader.remaining() == 0 { break; }
-                                        let id = reader.get_u8() as u32;
-                                        if id == 0 { break; }
-                                        id
-                                    } else {
-                                        let id = senax_encoder::read_u32_le(reader)?;
+                                        let id = senax_encoder::read_field_id_optimized(reader)?;
                                         if id == 0 { break; }
                                         id
                                     };
@@ -931,36 +811,24 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                 let tag = reader.get_u8();
                 match tag {
                     senax_encoder::TAG_ENUM => {
-                        let variant_id = if #container_id_u8 {
-                            reader.get_u8() as u32
-                        } else {
-                            senax_encoder::read_u32_le(reader)?
-                        };
+                        let variant_id = senax_encoder::read_field_id_optimized(reader)?;
                         match variant_id {
                             #(#unit_variant_arms)*
-                            _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown unit variant ID: 0x{:08X} for enum {}", variant_id, stringify!(#name))))
+                            _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown unit variant ID: 0x{:016X} for enum {}", variant_id, stringify!(#name))))
                         }
                     }
                     senax_encoder::TAG_ENUM_NAMED => {
-                        let variant_id = if #container_id_u8 {
-                            reader.get_u8() as u32
-                        } else {
-                            senax_encoder::read_u32_le(reader)?
-                        };
+                        let variant_id = senax_encoder::read_field_id_optimized(reader)?;
                         match variant_id {
                             #(#named_variant_arms)*
-                            _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown named variant ID: 0x{:08X} for enum {}", variant_id, stringify!(#name))))
+                            _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown named variant ID: 0x{:016X} for enum {}", variant_id, stringify!(#name))))
                         }
                     }
                     senax_encoder::TAG_ENUM_UNNAMED => {
-                        let variant_id = if #container_id_u8 {
-                            reader.get_u8() as u32
-                        } else {
-                            senax_encoder::read_u32_le(reader)?
-                        };
+                        let variant_id = senax_encoder::read_field_id_optimized(reader)?;
                         match variant_id {
                              #(#unnamed_variant_arms)*
-                            _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown unnamed variant ID: 0x{:08X} for enum {}", variant_id, stringify!(#name))))
+                            _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown unnamed variant ID: 0x{:016X} for enum {}", variant_id, stringify!(#name))))
                         }
                     }
                     unknown_tag => Err(senax_encoder::EncoderError::Decode(format!("Unknown enum tag: {} for enum {}", unknown_tag, stringify!(#name))))

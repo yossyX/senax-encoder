@@ -11,13 +11,12 @@
 //!
 //! You can control encoding/decoding behavior using the following attributes:
 //!
-//! - `#[senax(id = N)]` — Assigns a custom field or variant ID (u32 or u8, see below). Ensures stable wire format across versions.
+//! - `#[senax(id = N)]` — Assigns a custom field or variant ID (u64). Ensures stable wire format across versions.
 //! - `#[senax(default)]` — If a field is missing during decoding, its value is set to `Default::default()` instead of causing an error. For `Option<T>`, this means `None`.
 //! - `#[senax(skip_encode)]` — This field is not written during encoding. On decode, it is set to `Default::default()`.
 //! - `#[senax(skip_decode)]` — This field is ignored during decoding and always set to `Default::default()`. It is still encoded if present.
 //! - `#[senax(skip_default)]` — This field is not written during encoding if its value equals the default value. On decode, missing fields are set to `Default::default()`.
 //! - `#[senax(rename = "name")]` — Use the given string as the logical field/variant name for ID calculation. Useful for renaming fields/variants while keeping the same wire format.
-//! - `#[senax(u8)]` — On structs/enums, encodes field/variant IDs as `u8` instead of `u32` (for compactness, up to 255 IDs; 0 is reserved for terminator).
 //!
 //! ## Feature Flags
 //!
@@ -1293,6 +1292,24 @@ pub fn read_u32_le(reader: &mut Bytes) -> Result<u32> {
     Ok(reader.get_u32_le())
 }
 
+/// Writes a `u64` in little-endian format without a tag.
+///
+/// This is used internally for struct/enum field/variant IDs.
+pub fn write_u64_le(writer: &mut BytesMut, value: u64) -> Result<()> {
+    writer.put_u64_le(value);
+    Ok(())
+}
+
+/// Reads a `u64` in little-endian format without a tag.
+///
+/// This is used internally for struct/enum field/variant IDs.
+pub fn read_u64_le(reader: &mut Bytes) -> Result<u64> {
+    if reader.remaining() < 8 {
+        return Err(EncoderError::InsufficientData);
+    }
+    Ok(reader.get_u64_le())
+}
+
 /// Skips a value of any type in the senax binary format.
 ///
 /// This is used for forward/backward compatibility when unknown fields/variants are encountered.
@@ -1390,10 +1407,7 @@ pub fn skip_value(reader: &mut Bytes) -> Result<()> {
         TAG_STRUCT_UNIT => Ok(()),
         TAG_STRUCT_NAMED => {
             loop {
-                if reader.remaining() < 4 {
-                    return Err(EncoderError::InsufficientData);
-                } // field_id
-                let field_id = read_u32_le(reader)?;
+                let field_id = read_field_id_optimized(reader)?;
                 if field_id == 0 {
                     break;
                 }
@@ -1409,22 +1423,13 @@ pub fn skip_value(reader: &mut Bytes) -> Result<()> {
             Ok(())
         }
         TAG_ENUM => {
-            if reader.remaining() < 4 {
-                return Err(EncoderError::InsufficientData);
-            } // variant_id
-            let _variant_id = read_u32_le(reader)?;
+            let _variant_id = read_field_id_optimized(reader)?;
             Ok(())
         }
         TAG_ENUM_NAMED => {
-            if reader.remaining() < 4 {
-                return Err(EncoderError::InsufficientData);
-            } // variant_id
-            let _variant_id = read_u32_le(reader)?;
+            let _variant_id = read_field_id_optimized(reader)?;
             loop {
-                if reader.remaining() < 4 {
-                    return Err(EncoderError::InsufficientData);
-                } // field_id
-                let field_id = read_u32_le(reader)?;
+                let field_id = read_field_id_optimized(reader)?;
                 if field_id == 0 {
                     break;
                 }
@@ -1433,10 +1438,7 @@ pub fn skip_value(reader: &mut Bytes) -> Result<()> {
             Ok(())
         }
         TAG_ENUM_UNNAMED => {
-            if reader.remaining() < 4 {
-                return Err(EncoderError::InsufficientData);
-            } // variant_id
-            let _variant_id = read_u32_le(reader)?;
+            let _variant_id = read_field_id_optimized(reader)?;
             let field_count = usize::decode(reader)?;
             for _ in 0..field_count {
                 skip_value(reader)?;
@@ -2214,5 +2216,48 @@ impl Decoder for Value {
                 tag
             ))),
         }
+    }
+}
+
+/// Writes a `u64` in little-endian format without a tag.
+///
+/// This is used internally for struct/enum field/variant IDs.
+pub fn write_field_id_optimized(writer: &mut BytesMut, field_id: u64) -> Result<()> {
+    if field_id == 0 {
+        // Terminator
+        writer.put_u8(0);
+    } else if (1..=250).contains(&field_id) {
+        // Small field ID: write as u8
+        writer.put_u8(field_id as u8);
+    } else {
+        // Large field ID: write 255 marker then u64
+        writer.put_u8(255);
+        writer.put_u64_le(field_id);
+    }
+    Ok(())
+}
+
+/// Reads a field ID using optimized encoding.
+///
+/// Returns Ok(0) for terminator, Ok(field_id) for valid field ID.
+pub fn read_field_id_optimized(reader: &mut Bytes) -> Result<u64> {
+    if reader.remaining() < 1 {
+        return Err(EncoderError::InsufficientData);
+    }
+
+    let first_byte = reader.get_u8();
+
+    if first_byte == 0 {
+        // Terminator
+        Ok(0)
+    } else if first_byte == 255 {
+        // Large field ID follows
+        if reader.remaining() < 8 {
+            return Err(EncoderError::InsufficientData);
+        }
+        Ok(reader.get_u64_le())
+    } else {
+        // Small field ID
+        Ok(first_byte as u64)
     }
 }

@@ -635,75 +635,6 @@ fn test_rename_with_default() {
     assert_eq!(decoded.normal_field, 42);
 }
 
-// =============================================================================
-// #[senax(u8)] test
-// =============================================================================
-
-#[derive(Encode, Decode, Debug, PartialEq)]
-#[senax(u8)]
-struct U8IdStruct {
-    #[senax(id = 1)]
-    a: i32,
-    #[senax(id = 2)]
-    b: String,
-}
-
-#[derive(Encode, Decode, Debug, PartialEq)]
-#[senax(u8)]
-enum U8IdEnum {
-    #[senax(id = 1)]
-    A(i32),
-    #[senax(id = 2)]
-    B(String),
-}
-
-#[test]
-fn test_struct_with_u8_id() {
-    let value = U8IdStruct {
-        a: 42,
-        b: "abc".to_string(),
-    };
-    let mut buf = bytes::BytesMut::new();
-    value.encode(&mut buf).unwrap();
-
-    // Print binary content in detail
-    let bytes = buf.freeze();
-    println!("Binary content: {:?}", bytes.as_ref());
-    println!("Length: {}", bytes.len());
-    for (i, byte) in bytes.iter().enumerate() {
-        println!("  [{}]: {}", i, byte);
-    }
-
-    // Check that field IDs are written as u8
-    assert_eq!(bytes[0], senax_encoder::TAG_STRUCT_NAMED);
-    assert_eq!(bytes[1], 1); // a ID
-    assert_eq!(bytes[3], 2); // b ID (before string)
-    assert_eq!(bytes[4], senax_encoder::TAG_STRING_BASE + 3); // Encoded string "abc"
-    assert_eq!(bytes[bytes.len() - 1], 0); // End
-
-    // Decode also works
-    let mut reader = bytes.clone();
-    let decoded = U8IdStruct::decode(&mut reader).unwrap();
-    assert_eq!(decoded, value);
-}
-
-#[test]
-fn test_enum_with_u8_id() {
-    let value = U8IdEnum::A(123);
-    let mut buf = bytes::BytesMut::new();
-    value.encode(&mut buf).unwrap();
-
-    let bytes = buf.freeze();
-    // Check that variant IDs are written as u8
-    assert_eq!(bytes[0], senax_encoder::TAG_ENUM_UNNAMED);
-    assert_eq!(bytes[1], 1); // Variant A ID
-
-    // Decode also works
-    let mut reader = bytes.clone();
-    let decoded = U8IdEnum::decode(&mut reader).unwrap();
-    assert_eq!(decoded, value);
-}
-
 #[test]
 fn test_rename_only_behavior() {
     // Test that rename without explicit ID uses CRC32-based ID calculation
@@ -755,4 +686,84 @@ fn test_rename_only_behavior() {
 
     assert_eq!(decoded2.original_field, 456);
     assert_eq!(decoded2.other_field, "reverse");
+}
+
+// =============================================================================
+// Check that field IDs are written using optimized encoding
+// =============================================================================
+
+#[derive(Encode, Decode, Debug, PartialEq)]
+struct StructWithU8Id {
+    #[senax(id = 1)]
+    field_a: i32,
+    #[senax(id = 2)]
+    field_b: String,
+}
+
+#[test]
+fn test_struct_with_u8_id() {
+    let original = StructWithU8Id {
+        field_a: 42,
+        field_b: "abc".to_string(),
+    };
+
+    let mut buffer = BytesMut::new();
+    original.encode(&mut buffer).unwrap();
+
+    let bytes = buffer.freeze();
+
+    // Check that field IDs are written using optimized encoding
+    assert_eq!(bytes[0], senax_encoder::TAG_STRUCT_NAMED);
+    // bytes[1] should contain field ID 1 as u8
+    assert_eq!(bytes[1], 1);
+    // bytes[2] should contain TAG_ZERO (for value 42) followed by 42
+    assert_eq!(bytes[2], senax_encoder::TAG_ZERO + 42);
+    // bytes[3] should contain field ID 2 as u8
+    assert_eq!(bytes[3], 2);
+    // bytes[4] should be string tag for "abc"
+    assert_eq!(bytes[4], senax_encoder::TAG_STRING_BASE + 3);
+    // bytes[5..8] should be "abc"
+    assert_eq!(&bytes[5..8], b"abc");
+    // bytes[8] should be terminator (0 as u8)
+    assert_eq!(bytes[8], 0);
+}
+
+// =============================================================================
+// Check that variant IDs are written using optimized encoding
+// =============================================================================
+
+#[derive(Encode, Decode, Debug, PartialEq)]
+enum EnumWithU8Id {
+    #[senax(id = 1)]
+    VariantA {
+        #[senax(id = 1)]
+        normal_field: i32,
+        #[senax(id = 2, default)]
+        default_field: String,
+        #[senax(skip_encode, default)]
+        _skip_encode_field: f64,
+    },
+    #[senax(id = 2)]
+    VariantB(i32, String),
+    #[senax(id = 3)]
+    VariantC,
+}
+
+#[test]
+fn test_enum_with_u8_id() {
+    let original = EnumWithU8Id::VariantA {
+        normal_field: 42,
+        default_field: "test".to_string(),
+        _skip_encode_field: 3.14, // Not encoded
+    };
+
+    let mut buffer = BytesMut::new();
+    original.encode(&mut buffer).unwrap();
+
+    let bytes = buffer.freeze();
+
+    // Check that variant IDs are written using optimized encoding
+    assert_eq!(bytes[0], senax_encoder::TAG_ENUM_NAMED);
+    // bytes[1] should contain variant ID 1 as u8
+    assert_eq!(bytes[1], 1);
 }

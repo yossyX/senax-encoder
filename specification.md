@@ -48,16 +48,41 @@ For optimal space efficiency, integers use variable-length encoding:
 - Larger values: Use dedicated tag + payload encoding
 - Signed integers: Negative values use bit-inverted encoding (not ZigZag)
 
-### 2.4 #[senax(u8)] Attribute for Compact IDs
+### 2.4 Optimized Field ID Encoding
 
-If a struct or enum is annotated with `#[senax(u8)]`, field/variant IDs are encoded as `u8` instead of `u32`.
-- **Default:** IDs are `u32` little-endian, terminator is `0x00000000` (4 bytes)
-- **With #[senax(u8)]:** IDs are `u8`, terminator is `0x00` (1 byte), 0 is reserved for terminator
-- Not allowed if more than 255 IDs are needed
+Field IDs and variant IDs use an optimized encoding scheme for space efficiency:
 
-**Encoding Example:**
-- Default: `[field_id:u32_le] [field_value] ... [0x00000000]`
-- With #[senax(u8)]: `[field_id:u8] [field_value] ... [0x00]`
+**Encoding Rules:**
+- **Field IDs 1-250**: Encoded as single `u8` byte
+- **Field IDs 251+**: Encoded as `0xFF` marker byte followed by `u64` little-endian
+- **Terminator**: Encoded as `0x00` byte to mark end of fields
+
+**Format:**
+```
+// Small field ID (1-250)
+[field_id:u8] [field_value]
+
+// Large field ID (251+)  
+[0xFF] [field_id:u64_le] [field_value]
+
+// Terminator
+[0x00]
+```
+
+**Size Benefits:**
+- Most field IDs (1-250) use only 1 byte instead of 8 bytes
+- Terminator uses 1 byte instead of 8 bytes
+- Large field IDs (rare) use 9 bytes (1 marker + 8 data)
+
+**Examples:**
+```
+field_id=1   -> [0x01]              // Direct u8 encoding
+field_id=250 -> [0xFA]              // Direct u8 encoding (250 = 0xFA)
+field_id=251 -> [0xFF, 0xFB, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]  // Marker + u64_le
+terminator   -> [0x00]              // End of fields
+```
+
+This optimization significantly reduces binary size for typical structs and enums while maintaining full u64 field ID range support.
 
 ## 3. Tag System
 
@@ -338,13 +363,15 @@ Keys are encoded as strings, values are recursively encoded as JSON values.
 
 **Format:**
 ```
-[TAG_STRUCT_NAMED] [field_id:u32_le] [field_value] ... [0x00000000]
+[TAG_STRUCT_NAMED] [field_id_optimized] [field_value] ... [0x00]
 ```
 **Field Encoding Rules:**
-- Each field is encoded as `[field_id:u32_le] [field_value]`
-- Field IDs are derived from field names (hash) or custom `#[senax(id=n)]` attributes
+- Each field is encoded as `[field_id_optimized] [field_value]`
+- Field IDs are derived from field names (CRC64(ECMA-182) hash) or custom `#[senax(id=n)]` attributes
+- Field IDs 1-250 are encoded as single `u8` bytes
+- Field IDs 251+ are encoded as `0xFF` marker + `u64` little-endian
 - Optional fields with `None` values are omitted entirely
-- Terminator: 4 zero bytes (0x00000000) marks end of fields
+- Terminator: single zero byte (0x00) marks end of fields
 
 ### 5.3 Unnamed Field Structs (Tuples)
 
@@ -359,22 +386,24 @@ Keys are encoded as strings, values are recursively encoded as JSON values.
 
 **Format:**
 ```
-[TAG_ENUM] [variant_id:u32_le]
+[TAG_ENUM] [variant_id_optimized]
 ```
 #### Named Field Variants
 
 **Format:**
 ```
-[TAG_ENUM_NAMED] [variant_id:u32_le] [field_id:u32_le] [field_value] ... [0x00000000]
+[TAG_ENUM_NAMED] [variant_id_optimized] [field_id_optimized] [field_value] ... [0x00]
 ```
 #### Unnamed Field Variants
 
 **Format:**
 ```
-[TAG_ENUM_UNNAMED] [variant_id:u32_le] [field_count:variable_uint] [field1] [field2] ...
+[TAG_ENUM_UNNAMED] [variant_id_optimized] [field_count:variable_uint] [field1] [field2] ...
 ```
 **Variant ID Assignment:**
-- Derived from variant name (hash) or custom `#[senax(id=n)]` attributes
+- Derived from variant name (CRC64 hash) or custom `#[senax(id=n)]` attributes
+- Variant IDs 1-250 are encoded as single `u8` bytes
+- Variant IDs 251+ are encoded as `0xFF` marker + `u64` little-endian
 - Must be stable across versions for compatibility
 
 ## 6. Schema Evolution
