@@ -467,7 +467,7 @@ struct OriginalWithRename {
 
 #[derive(Encode, Decode, Debug, PartialEq)]
 struct CompatibleWithOldName {
-    #[senax(id = 1, rename = "old_name")] // Explicit ID and rename (ID takes precedence)
+    #[senax(id = 1, rename = "old_name")] // Explicit ID overrides rename-based ID calculation
     field_with_explicit_id: i32,
     #[senax(id = 2)]
     another_field: String,
@@ -502,34 +502,47 @@ fn test_rename_attribute_compatibility() {
 
 #[test]
 fn test_rename_with_explicit_id() {
-    // Encode the struct with explicit ID and rename
-    let compat_struct = CompatibleWithOldName {
-        field_with_explicit_id: 99,
-        another_field: "explicit".to_string(),
+    // Test that explicit ID takes precedence over rename-based ID calculation
+
+    // Create a struct that would have a different ID if CRC32("different_name") was used
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct DifferentNameStruct {
+        #[senax(id = 1)] // Same explicit ID as CompatibleWithOldName
+        different_name: i32, // Different field name
+        #[senax(id = 2)]
+        another_field: String,
+    }
+
+    // Encode with DifferentNameStruct
+    let original = DifferentNameStruct {
+        different_name: 42,
+        another_field: "test".to_string(),
     };
 
     let mut buffer = BytesMut::new();
-    compat_struct.encode(&mut buffer).unwrap();
+    original.encode(&mut buffer).unwrap();
 
-    // Simulate old data with missing field
-    #[derive(Encode, Decode, Debug, PartialEq)]
-    struct PartialLegacy {
-        #[senax(id = 2)]
-        normal_field: i32,
-        // legacy_field is missing
-    }
-
-    let partial = PartialLegacy { normal_field: 42 };
-
-    let mut buffer = BytesMut::new();
-    partial.encode(&mut buffer).unwrap();
-
-    // With rename+default, field gets default value even if missing
+    // Decode with CompatibleWithOldName - should work because both use id=1
     let mut reader = buffer.freeze();
     let decoded = CompatibleWithOldName::decode(&mut reader).unwrap();
 
-    assert_eq!(decoded.field_with_explicit_id, 99);
-    assert_eq!(decoded.another_field, "explicit");
+    assert_eq!(decoded.field_with_explicit_id, 42);
+    assert_eq!(decoded.another_field, "test");
+
+    // Test the reverse direction
+    let compat_struct = CompatibleWithOldName {
+        field_with_explicit_id: 99,
+        another_field: "reverse".to_string(),
+    };
+
+    let mut buffer2 = BytesMut::new();
+    compat_struct.encode(&mut buffer2).unwrap();
+
+    let mut reader2 = buffer2.freeze();
+    let decoded2 = DifferentNameStruct::decode(&mut reader2).unwrap();
+
+    assert_eq!(decoded2.different_name, 99);
+    assert_eq!(decoded2.another_field, "reverse");
 }
 
 // =============================================================================
@@ -689,4 +702,57 @@ fn test_enum_with_u8_id() {
     let mut reader = bytes.clone();
     let decoded = U8IdEnum::decode(&mut reader).unwrap();
     assert_eq!(decoded, value);
+}
+
+#[test]
+fn test_rename_only_behavior() {
+    // Test that rename without explicit ID uses CRC32-based ID calculation
+
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct WithRenameOnly {
+        #[senax(rename = "original_field")] // Uses CRC32("original_field") as ID
+        renamed_field: i32,
+        #[senax(id = 100)] // Explicit ID to avoid collision
+        other_field: String,
+    }
+
+    // Simulate the original struct that had "original_field" as the actual field name
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct OriginalFieldStruct {
+        original_field: i32, // CRC32("original_field") ID - same as rename calculation
+        #[senax(id = 100)]
+        other_field: String,
+    }
+
+    // Encode with the original struct
+    let original = OriginalFieldStruct {
+        original_field: 123,
+        other_field: "compatible".to_string(),
+    };
+
+    let mut buffer = BytesMut::new();
+    original.encode(&mut buffer).unwrap();
+
+    // Decode with the renamed struct - should work because rename="original_field"
+    // generates the same ID as the actual field name "original_field"
+    let mut reader = buffer.freeze();
+    let decoded = WithRenameOnly::decode(&mut reader).unwrap();
+
+    assert_eq!(decoded.renamed_field, 123);
+    assert_eq!(decoded.other_field, "compatible");
+
+    // Test reverse direction
+    let renamed_struct = WithRenameOnly {
+        renamed_field: 456,
+        other_field: "reverse".to_string(),
+    };
+
+    let mut buffer2 = BytesMut::new();
+    renamed_struct.encode(&mut buffer2).unwrap();
+
+    let mut reader2 = buffer2.freeze();
+    let decoded2 = OriginalFieldStruct::decode(&mut reader2).unwrap();
+
+    assert_eq!(decoded2.original_field, 456);
+    assert_eq!(decoded2.other_field, "reverse");
 }

@@ -1,15 +1,18 @@
 extern crate proc_macro;
 
-use proc_macro::TokenStream;
-use quote::quote;
-use syn::{parse_macro_input, DeriveInput, Data, Fields, Ident, Type, PathArguments, GenericArgument, Attribute};
-use proc_macro2::Span;
 use crc32fast::Hasher;
-use std::collections::{HashSet, HashMap};
 use itertools::izip;
+use proc_macro::TokenStream;
+use proc_macro2::Span;
+use quote::quote;
+use std::collections::{HashMap, HashSet};
+use syn::{
+    parse_macro_input, Attribute, Data, DeriveInput, Fields, GenericArgument, Ident, PathArguments,
+    Type,
+};
 
 /// Calculate ID (CRC32) from name
-/// 
+///
 /// This function computes a CRC32 hash of the given name string and returns it as a u32.
 /// If the computed hash is 0, it returns 1 instead since 0 is reserved as a terminator.
 fn calculate_id_from_name(name: &str) -> u32 {
@@ -17,16 +20,20 @@ fn calculate_id_from_name(name: &str) -> u32 {
     hasher.update(name.as_bytes());
     let id = hasher.finalize();
     // If ID is 0, replace with 1 (0 is reserved as a terminator)
-    if id == 0 { 1 } else { id }
+    if id == 0 {
+        1
+    } else {
+        id
+    }
 }
 
 /// Field attributes parsed from `#[senax(...)]` annotations
-/// 
+///
 /// This struct represents the various attributes that can be applied to fields
 /// in structs and enum variants using the `#[senax(...)]` attribute macro.
-/// 
+///
 /// # Fields
-/// 
+///
 /// * `id` - The unique identifier for this field (computed from name or explicitly set)
 /// * `default` - Whether to use default values when the field is missing during decode
 /// * `skip_encode` - Whether to exclude this field from encoding
@@ -43,28 +50,28 @@ struct FieldAttributes {
 }
 
 /// Extract and parse `#[senax(...)]` attribute values from field attributes
-/// 
+///
 /// This function parses the senax attributes applied to a field and returns
 /// a `FieldAttributes` struct containing all the parsed values.
-/// 
+///
 /// # Arguments
-/// 
+///
 /// * `attrs` - The attributes array from the field
 /// * `field_name` - The name of the field (used for ID calculation if no explicit ID is provided)
-/// 
+///
 /// # Returns
-/// 
+///
 /// A `FieldAttributes` struct with parsed values. If no explicit ID is provided,
 /// the ID is calculated using CRC32 hash of either the rename value or the field name.
-/// 
+///
 /// # Supported Attributes
-/// 
+///
 /// * `#[senax(id=1234)]` - Explicit field ID
 /// * `#[senax(default)]` - Use default value if field is missing during decode
 /// * `#[senax(skip_encode)]` - Skip this field during encoding
 /// * `#[senax(skip_decode)]` - Skip this field during decoding
 /// * `#[senax(rename="name")]` - Alternative name for ID calculation
-/// 
+///
 /// Multiple attributes can be combined: `#[senax(id=123, default, skip_encode)]`
 fn get_field_attributes(attrs: &[Attribute], field_name: &str) -> FieldAttributes {
     let mut id = None;
@@ -85,13 +92,16 @@ fn get_field_attributes(attrs: &[Attribute], field_name: &str) -> FieldAttribute
 
                 while !input.is_empty() {
                     let ident = input.parse::<syn::Ident>()?;
-                    
+
                     if ident == "id" {
                         input.parse::<syn::Token![=]>()?;
                         let lit = input.parse::<syn::LitInt>()?;
                         if let Ok(id_val) = lit.base10_parse::<u32>() {
                             if id_val == 0 {
-                                return Err(syn::Error::new(lit.span(), "Field ID 0 is reserved as a terminator"));
+                                return Err(syn::Error::new(
+                                    lit.span(),
+                                    "Field ID 0 is reserved as a terminator",
+                                ));
                             }
                             parsed_id = Some(id_val);
                         } else {
@@ -108,19 +118,35 @@ fn get_field_attributes(attrs: &[Attribute], field_name: &str) -> FieldAttribute
                         let lit_str = input.parse::<syn::LitStr>()?;
                         parsed_rename = Some(lit_str.value());
                     } else {
-                        return Err(syn::Error::new(ident.span(), format!("Unknown attribute: {}", ident)));
+                        return Err(syn::Error::new(
+                            ident.span(),
+                            format!("Unknown attribute: {}", ident),
+                        ));
                     }
-                    
+
                     // Consume comma if present, otherwise end
                     if input.peek(syn::Token![,]) {
                         input.parse::<syn::Token![,]>()?;
                     }
                 }
-                
-                Ok((parsed_id, parsed_default, parsed_skip_encode, parsed_skip_decode, parsed_rename))
+
+                Ok((
+                    parsed_id,
+                    parsed_default,
+                    parsed_skip_encode,
+                    parsed_skip_decode,
+                    parsed_rename,
+                ))
             });
-            
-            if let Ok((parsed_id, parsed_default, parsed_skip_encode, parsed_skip_decode, parsed_rename)) = parsed {
+
+            if let Ok((
+                parsed_id,
+                parsed_default,
+                parsed_skip_encode,
+                parsed_skip_decode,
+                parsed_rename,
+            )) = parsed
+            {
                 if let Some(id_val) = parsed_id {
                     id = Some(id_val);
                 }
@@ -131,11 +157,14 @@ fn get_field_attributes(attrs: &[Attribute], field_name: &str) -> FieldAttribute
                     rename = Some(rename_val);
                 }
             } else {
-                eprintln!("Warning: #[senax(...)] attribute for field '{}' is not in the correct format.", field_name);
+                eprintln!(
+                    "Warning: #[senax(...)] attribute for field '{}' is not in the correct format.",
+                    field_name
+                );
             }
         }
     }
-    
+
     // ID calculation: Use explicit ID if provided, otherwise calculate CRC32 from rename or field name
     let calculated_id = id.unwrap_or_else(|| {
         let name_for_id = if let Some(ref rename_val) = rename {
@@ -145,7 +174,7 @@ fn get_field_attributes(attrs: &[Attribute], field_name: &str) -> FieldAttribute
         };
         calculate_id_from_name(name_for_id)
     });
-    
+
     FieldAttributes {
         id: calculated_id,
         default,
@@ -156,24 +185,35 @@ fn get_field_attributes(attrs: &[Attribute], field_name: &str) -> FieldAttribute
 }
 
 /// Check if a type is `Option<T>`
-/// 
+///
 /// This helper function determines whether a given type is wrapped in an `Option`.
 fn is_option_type(ty: &Type) -> bool {
     if let Type::Path(type_path) = ty {
-        type_path.path.segments.last().map_or(false, |seg| seg.ident == "Option")
+        type_path
+            .path
+            .segments
+            .last()
+            .map_or(false, |seg| seg.ident == "Option")
     } else {
         false
     }
 }
 
 /// Extract the inner type `T` from `Option<T>`
-/// 
+///
 /// This helper function extracts the wrapped type from an `Option` type.
 /// Returns `None` if the type is not an `Option`.
 fn extract_inner_type_from_option(ty: &Type) -> Option<&Type> {
     if let Type::Path(type_path) = ty {
-        if type_path.path.segments.last().map_or(false, |seg| seg.ident == "Option") {
-            if let PathArguments::AngleBracketed(args) = &type_path.path.segments.last().unwrap().arguments {
+        if type_path
+            .path
+            .segments
+            .last()
+            .map_or(false, |seg| seg.ident == "Option")
+        {
+            if let PathArguments::AngleBracketed(args) =
+                &type_path.path.segments.last().unwrap().arguments
+            {
                 if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
                     return Some(inner_ty);
                 }
@@ -211,19 +251,19 @@ fn get_container_attributes(attrs: &[Attribute]) -> bool {
 }
 
 /// Derive macro for implementing the `Encode` trait
-/// 
+///
 /// This procedural macro automatically generates an implementation of the `Encode` trait
 /// for structs and enums. It supports various field attributes for customizing the
 /// encoding behavior.
-/// 
+///
 /// # Supported Attributes
-/// 
+///
 /// * `#[senax(id=N)]` - Set explicit field/variant ID
 /// * `#[senax(skip_encode)]` - Skip field during encoding
 /// * `#[senax(rename="name")]` - Use alternative name for ID calculation
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```rust
 /// #[derive(Encode)]
 /// struct MyStruct {
@@ -248,21 +288,21 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                 for f in &fields.named {
                     let field_name_str = f.ident.as_ref().unwrap().to_string();
                     let field_attrs = get_field_attributes(&f.attrs, &field_name_str);
-                    
+
                     // Skip fields marked with skip_encode
                     if field_attrs.skip_encode {
                         continue;
                     }
-                    
+
                     if !used_ids_struct.insert(field_attrs.id) {
                         panic!("Field ID (0x{:08X}) is duplicated for struct '{}'. Please specify a different ID for field '{}' using #[senax(id=...)].", field_attrs.id, name, field_name_str);
                     }
-                    
+
                     let field_ident = &f.ident;
                     let ty = &f.ty;
                     let is_option = is_option_type(ty);
                     let field_id = field_attrs.id;
-                    
+
                     if is_option {
                         if container_id_u8 {
                             field_encode.push(quote! {
@@ -285,24 +325,22 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                                 }
                             });
                         }
+                    } else if container_id_u8 {
+                        field_encode.push(quote! {
+                            let field_id_val: u8 = #field_id as u8;
+                            writer.put_u8(field_id_val);
+                            self.#field_ident.encode(writer)?;
+                        });
                     } else {
-                        if container_id_u8 {
-                            field_encode.push(quote! {
-                                let field_id_val: u8 = #field_id as u8;
-                                writer.put_u8(field_id_val);
-                                self.#field_ident.encode(writer)?;
-                            });
-                        } else {
-                            field_encode.push(quote! {
-                                let field_id_val: u32 = #field_id;
-                                if #container_id_u8 {
-                                    writer.put_u8(field_id_val as u8);
-                                } else {
-                                    senax_encoder::write_u32_le(writer, field_id_val)?;
-                                }
-                                self.#field_ident.encode(writer)?;
-                            });
-                        }
+                        field_encode.push(quote! {
+                            let field_id_val: u32 = #field_id;
+                            if #container_id_u8 {
+                                writer.put_u8(field_id_val as u8);
+                            } else {
+                                senax_encoder::write_u32_le(writer, field_id_val)?;
+                            }
+                            self.#field_ident.encode(writer)?;
+                        });
                     }
                 }
                 if container_id_u8 {
@@ -341,31 +379,35 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
         Data::Enum(e) => {
             let mut variant_encode = Vec::new();
             let mut used_ids_enum = HashSet::new();
-            
+
             for v in &e.variants {
                 let variant_name_str = v.ident.to_string();
                 let variant_attrs = get_field_attributes(&v.attrs, &variant_name_str);
                 let variant_id = variant_attrs.id;
-                
+
                 if !used_ids_enum.insert(variant_id) {
                     panic!("Variant ID (0x{:08X}) is duplicated for enum '{}'. Please specify a different ID for variant '{}' using #[senax(id=...)].", variant_id, name, variant_name_str);
                 }
-                
+
                 let variant_ident = &v.ident;
                 match &v.fields {
                     Fields::Named(fields) => {
-                        let field_idents: Vec<_> = fields.named.iter().map(|f| f.ident.as_ref().unwrap()).collect();
+                        let field_idents: Vec<_> = fields
+                            .named
+                            .iter()
+                            .map(|f| f.ident.as_ref().unwrap())
+                            .collect();
                         let mut field_encode = Vec::new();
                         let mut used_ids_struct = HashSet::new();
                         for f in &fields.named {
                             let field_name_str = f.ident.as_ref().unwrap().to_string();
                             let field_attrs = get_field_attributes(&f.attrs, &field_name_str);
-                            
+
                             // Skip fields marked with skip_encode
                             if field_attrs.skip_encode {
                                 continue;
                             }
-                            
+
                             if !used_ids_struct.insert(field_attrs.id) {
                                 panic!("Field ID (0x{:08X}) is duplicated for enum variant '{}'. Please specify a different ID for field '{}' using #[senax(id=...)].", field_attrs.id, variant_ident, field_name_str);
                             }
@@ -482,20 +524,20 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
 }
 
 /// Derive macro for implementing the `Decode` trait
-/// 
+///
 /// This procedural macro automatically generates an implementation of the `Decode` trait
 /// for structs and enums. It supports various field attributes for customizing the
 /// decoding behavior and provides forward/backward compatibility.
-/// 
+///
 /// # Supported Attributes
-/// 
+///
 /// * `#[senax(id=N)]` - Set explicit field/variant ID
 /// * `#[senax(default)]` - Use default value if field is missing
 /// * `#[senax(skip_decode)]` - Skip field during decoding (use default value)
 /// * `#[senax(rename="name")]` - Use alternative name for ID calculation
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```rust
 /// #[derive(Decode)]
 /// struct MyStruct {
@@ -527,12 +569,14 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                 for f in &fields.named {
                     let field_name_str = f.ident.as_ref().unwrap().to_string();
                     let field_attrs = get_field_attributes(&f.attrs, &field_name_str);
-                    
-                    if let Some(dup_field_name) = used_ids_struct_decode.insert(field_attrs.id, field_name_str.clone()) {
+
+                    if let Some(dup_field_name) =
+                        used_ids_struct_decode.insert(field_attrs.id, field_name_str.clone())
+                    {
                         panic!("Field ID (0x{:08X}) is duplicated for struct '{}'. Please specify a different ID for field '{}' and '{}' using #[senax(id=...)].", 
                               field_attrs.id, name, dup_field_name, field_name_str);
                     }
-                    
+
                     field_idents.push(f.ident.as_ref().unwrap().clone());
                     field_original_types.push(f.ty.clone());
                     field_ids_for_match.push(field_attrs.id);
@@ -540,7 +584,8 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                     field_attrs_list.push(field_attrs);
                 }
 
-                let field_value_definitions = field_idents.iter()
+                let field_value_definitions = field_idents
+                    .iter()
                     .zip(field_original_types.iter())
                     .zip(field_attrs_list.iter())
                     .filter_map(|((ident, original_ty), attrs)| {
@@ -548,13 +593,14 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                             // Fields marked with skip_decode don't store values
                             None
                         } else if is_option_type(original_ty) {
-                             Some(quote! { #ident: #original_ty, })
+                            Some(quote! { #ident: #original_ty, })
                         } else {
-                             Some(quote! { #ident: Option<#original_ty>, })
+                            Some(quote! { #ident: Option<#original_ty>, })
                         }
                     });
 
-                let match_arms = field_idents.iter()
+                let match_arms = field_idents
+                    .iter()
                     .zip(field_original_types.iter())
                     .zip(field_ids_for_match.iter())
                     .zip(field_attrs_list.iter())
@@ -564,7 +610,12 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                             None
                         } else if is_option_type(original_ty) {
                             let inner_ty = extract_inner_type_from_option(original_ty)
-                                .expect(&format!("Failed to extract inner type from Option for field {}", ident));
+                                .unwrap_or_else(|| {
+                                    panic!(
+                                        "Failed to extract inner type from Option for field {}",
+                                        ident
+                                    )
+                                });
                             Some(quote! {
                                 x if x == #id_val => {
                                     field_values.#ident = Some(<#inner_ty>::decode(reader)?);
@@ -669,7 +720,7 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                     ))
                 }
             }
-            Fields::Unit => quote! { 
+            Fields::Unit => quote! {
                 if reader.remaining() == 0 {
                     return Err(senax_encoder::EncoderError::InsufficientData);
                 }
@@ -677,7 +728,7 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                 if tag != senax_encoder::TAG_STRUCT_UNIT {
                     return Err(senax_encoder::EncoderError::Decode(format!("Expected struct unit tag ({}), got {}", senax_encoder::TAG_STRUCT_UNIT, tag)));
                 }
-                Ok(#name) 
+                Ok(#name)
             },
         },
         Data::Enum(e) => {
@@ -685,29 +736,49 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
             let mut named_variant_arms = Vec::new();
             let mut unnamed_variant_arms = Vec::new();
             let mut used_ids_enum_decode = HashMap::new();
-            
+
             for v in &e.variants {
                 let variant_name_str = v.ident.to_string();
                 let variant_attrs = get_field_attributes(&v.attrs, &variant_name_str);
                 let variant_id = variant_attrs.id;
-                
-                if let Some(dup_variant) = used_ids_enum_decode.insert(variant_id, variant_name_str.clone()) {
+
+                if let Some(dup_variant) =
+                    used_ids_enum_decode.insert(variant_id, variant_name_str.clone())
+                {
                     panic!("Variant ID (0x{:08X}) is duplicated for enum '{}'. Please specify a different ID for variant '{}' and '{}' using #[senax(id=...)].", 
                           variant_id, name, dup_variant, variant_name_str);
                 }
-                
+
                 let variant_ident = &v.ident;
                 match &v.fields {
                     Fields::Named(fields) => {
-                        let field_idents: Vec<_> = fields.named.iter().map(|f| f.ident.as_ref().unwrap().clone()).collect();
-                        let field_types: Vec<_> = fields.named.iter().map(|f| f.ty.clone()).collect();
-                        let field_attrs_list: Vec<_> = fields.named.iter().map(|f| get_field_attributes(&f.attrs, &f.ident.as_ref().unwrap().to_string())).collect();
-                         
+                        let field_idents: Vec<_> = fields
+                            .named
+                            .iter()
+                            .map(|f| f.ident.as_ref().unwrap().clone())
+                            .collect();
+                        let field_types: Vec<_> =
+                            fields.named.iter().map(|f| f.ty.clone()).collect();
+                        let field_attrs_list: Vec<_> = fields
+                            .named
+                            .iter()
+                            .map(|f| {
+                                get_field_attributes(
+                                    &f.attrs,
+                                    &f.ident.as_ref().unwrap().to_string(),
+                                )
+                            })
+                            .collect();
+
                         let mut field_value_definitions_enum = Vec::new();
                         let mut match_arms_enum_named = Vec::new();
                         let mut struct_assignments_enum_named = Vec::new();
 
-                        for (ident, ty, attrs) in izip!(field_idents.iter(), field_types.iter(), field_attrs_list.iter()) {
+                        for (ident, ty, attrs) in izip!(
+                            field_idents.iter(),
+                            field_types.iter(),
+                            field_attrs_list.iter()
+                        ) {
                             if attrs.skip_decode {
                                 // Fields marked with skip_decode don't store values
                             } else if is_option_type(ty) {
@@ -715,7 +786,7 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                             } else {
                                 field_value_definitions_enum.push(quote! { #ident: Option<#ty>, });
                             }
-                            
+
                             if attrs.skip_decode {
                                 // Fields marked with skip_decode don't generate match arms
                             } else if is_option_type(ty) {
@@ -733,9 +804,11 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
 
                             if attrs.skip_decode {
                                 // Fields marked with skip_decode use default values
-                                struct_assignments_enum_named.push(quote! { #ident: Default::default(), });
+                                struct_assignments_enum_named
+                                    .push(quote! { #ident: Default::default(), });
                             } else if is_option_type(ty) {
-                                struct_assignments_enum_named.push(quote! { #ident: field_values.#ident, });
+                                struct_assignments_enum_named
+                                    .push(quote! { #ident: field_values.#ident, });
                             } else if attrs.default {
                                 // Fields marked with default use default value if missing
                                 struct_assignments_enum_named.push(quote! {
@@ -854,5 +927,3 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
         }
     })
 }
-
-

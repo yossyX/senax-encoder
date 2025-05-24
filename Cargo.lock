@@ -514,7 +514,7 @@ checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 
 [[package]]
 name = "senax-encoder"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "chrono",
@@ -528,7 +528,7 @@ dependencies = [
 
 [[package]]
 name = "senax-encoder-derive"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "crc32fast",
  "itertools",

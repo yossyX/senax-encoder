@@ -57,6 +57,7 @@ use rust_decimal::Decimal;
 pub use senax_encoder_derive::{Decode, Encode};
 use std::collections::HashMap;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::sync::Arc;
 use thiserror::Error;
 #[cfg(feature = "ulid")]
 use ulid::Ulid;
@@ -574,7 +575,10 @@ impl Decoder for i8 {
             t => {
                 let v = decode_u8_from_tag(t, reader)?;
                 if v > i8::MAX as u8 {
-                    return Err(EncoderError::Decode(format!("Value {} too large for i8", v)));
+                    return Err(EncoderError::Decode(format!(
+                        "Value {} too large for i8",
+                        v
+                    )));
                 }
                 Ok(v as i8)
             }
@@ -607,7 +611,10 @@ impl Decoder for i16 {
             t => {
                 let v = decode_u16_from_tag(t, reader)?;
                 if v > i16::MAX as u16 {
-                    return Err(EncoderError::Decode(format!("Value {} too large for i16", v)));
+                    return Err(EncoderError::Decode(format!(
+                        "Value {} too large for i16",
+                        v
+                    )));
                 }
                 Ok(v as i16)
             }
@@ -640,7 +647,10 @@ impl Decoder for i32 {
             t => {
                 let v = decode_u32_from_tag(t, reader)?;
                 if v > i32::MAX as u32 {
-                    return Err(EncoderError::Decode(format!("Value {} too large for i32", v)));
+                    return Err(EncoderError::Decode(format!(
+                        "Value {} too large for i32",
+                        v
+                    )));
                 }
                 Ok(v as i32)
             }
@@ -673,7 +683,10 @@ impl Decoder for i64 {
             t => {
                 let v = decode_u64_from_tag(t, reader)?;
                 if v > i64::MAX as u64 {
-                    return Err(EncoderError::Decode(format!("Value {} too large for i64", v)));
+                    return Err(EncoderError::Decode(format!(
+                        "Value {} too large for i64",
+                        v
+                    )));
                 }
                 Ok(v as i64)
             }
@@ -706,7 +719,10 @@ impl Decoder for i128 {
             t => {
                 let v = decode_u128_from_tag(t, reader)?;
                 if v > i128::MAX as u128 {
-                    return Err(EncoderError::Decode(format!("Value {} too large for i128", v)));
+                    return Err(EncoderError::Decode(format!(
+                        "Value {} too large for i128",
+                        v
+                    )));
                 }
                 Ok(v as i128)
             }
@@ -1842,5 +1858,17 @@ impl Decoder for Ulid {
         }
         let ulid_u128 = reader.get_u128_le();
         Ok(Ulid(ulid_u128))
+    }
+}
+
+// --- Arc<String> ---
+impl Encoder for Arc<String> {
+    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+        (**self).encode(writer)
+    }
+}
+impl Decoder for Arc<String> {
+    fn decode(reader: &mut Bytes) -> Result<Self> {
+        Ok(Arc::new(String::decode(reader)?))
     }
 }

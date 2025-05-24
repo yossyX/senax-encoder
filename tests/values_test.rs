@@ -11,6 +11,7 @@ use senax_encoder_derive::{Decode, Encode};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 #[cfg(any(feature = "rust_decimal", feature = "uuid"))]
 use std::str::FromStr;
+use std::sync::Arc;
 #[cfg(feature = "ulid")]
 use ulid::Ulid;
 #[cfg(feature = "uuid")]
@@ -1688,28 +1689,84 @@ fn test_uuid_ulid_compatibility() {
 
 #[test]
 fn test_u8_optimization_boundaries() {
-    use senax_encoder::{Encoder, Decoder};
     use bytes::BytesMut;
-    
+    use senax_encoder::{Decoder, Encoder};
+
     // Test TAG_U8 optimization boundaries
     let test_cases = [
         // TAG_ZERO boundaries
         (127u16, vec![130]), // TAG_ZERO + 127 = 130
         // TAG_U8 range
-        (128u16, vec![131, 0]), // TAG_U8, 128-128=0
+        (128u16, vec![131, 0]),   // TAG_U8, 128-128=0
         (383u16, vec![131, 255]), // TAG_U8, 383-128=255 (max)
         // TAG_U16 starts
         (384u16, vec![132, 128, 1]), // TAG_U16, 384 in LE
     ];
-    
+
     for (val, expected) in test_cases {
         let mut buf = BytesMut::new();
         val.encode(&mut buf).unwrap();
         assert_eq!(buf.as_ref(), expected, "Failed encoding for value {}", val);
-        
+
         // Round-trip test
         let mut read_buf = buf.freeze();
         let decoded = u16::decode(&mut read_buf).unwrap();
         assert_eq!(decoded, val, "Round-trip failed for value {}", val);
+    }
+}
+
+#[test]
+fn test_arc_string_encode_decode() {
+    let values = vec![
+        Arc::new(String::from("")),
+        Arc::new(String::from("hello")),
+        Arc::new(String::from("こんにちは世界")),
+        Arc::new(String::from(
+            "a very long string with unicode 🚀 and symbols !@#$%^&*()",
+        )),
+    ];
+    for original in values {
+        let mut buf = BytesMut::new();
+        original.encode(&mut buf).unwrap();
+        let mut cur = buf.freeze();
+        let decoded = Arc::<String>::decode(&mut cur).unwrap();
+        assert_eq!(&*original, &*decoded, "Arc<String> roundtrip failed");
+        // Check that Arc is not the same pointer, but content is equal
+        assert!(!Arc::ptr_eq(&original, &decoded) || Arc::strong_count(&original) == 1);
+    }
+}
+
+#[derive(Encode, Decode, Debug, PartialEq)]
+struct ArcStringStruct {
+    name: Arc<String>,
+    nickname: Option<Arc<String>>,
+}
+
+#[test]
+fn test_struct_with_arc_string_fields() {
+    let cases = vec![
+        ArcStringStruct {
+            name: Arc::new("Alice".to_string()),
+            nickname: Some(Arc::new("Ally".to_string())),
+        },
+        ArcStringStruct {
+            name: Arc::new("Bob".to_string()),
+            nickname: None,
+        },
+        ArcStringStruct {
+            name: Arc::new("".to_string()),
+            nickname: Some(Arc::new("".to_string())),
+        },
+        ArcStringStruct {
+            name: Arc::new("こんにちは".to_string()),
+            nickname: Some(Arc::new("世界".to_string())),
+        },
+    ];
+    for original in cases {
+        let mut buf = BytesMut::new();
+        original.encode(&mut buf).unwrap();
+        let mut cur = buf.freeze();
+        let decoded = ArcStringStruct::decode(&mut cur).unwrap();
+        assert_eq!(original, decoded, "ArcStringStruct roundtrip failed");
     }
 }
