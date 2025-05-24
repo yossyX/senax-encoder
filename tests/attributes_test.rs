@@ -262,7 +262,7 @@ fn test_multiple_attributes_combination() {
     assert_eq!(decoded.normal_field, 100);
     assert_eq!(decoded.default_field, "custom");
     assert_eq!(decoded.skip_encode_field, 0.0); // Default value (skip_encode+default)
-    assert_eq!(decoded.skip_decode_with_default, vec![]); // Default value (skip_decode+default)
+    assert_eq!(decoded.skip_decode_with_default, Vec::<u8>::new()); // Default value (skip_decode+default)
     assert_eq!(decoded.last_normal_field, true);
 }
 

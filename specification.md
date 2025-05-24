@@ -283,6 +283,48 @@ Epoch: 1970-01-01
 ```
 **Note:** UUID and ULID share the same tag and are binary compatible at the encoding level.
 
+### 4.14 serde_json::Value (Feature: serde_json)
+
+Dynamic JSON values are supported when the `serde_json` feature is enabled. Each JSON value variant has its own tag:
+
+- **TAG_JSON_NULL (202)**: JSON null value
+- **TAG_JSON_BOOL (203)**: JSON boolean (uses existing boolean encoding)
+- **TAG_JSON_NUMBER (204)**: JSON number with type preservation
+- **TAG_JSON_STRING (205)**: JSON string (uses existing string encoding)
+- **TAG_JSON_ARRAY (206)**: JSON array
+- **TAG_JSON_OBJECT (207)**: JSON object
+
+#### JSON Number Encoding
+
+JSON numbers are encoded with type preservation to maintain integer/float distinction:
+
+**Format:** `TAG_JSON_NUMBER` + `type_marker` + `value`
+
+- `type_marker = 0`: Unsigned integer, followed by u64 encoding
+- `type_marker = 1`: Signed integer, followed by i64 encoding  
+- `type_marker = 2`: Float, followed by f64 encoding
+
+**Examples:**
+- `42` (integer) → `[204, 0, ...]` (TAG_JSON_NUMBER, unsigned integer marker, i64 encoding)
+- `3.14159` (float) → `[204, 2, ...]` (TAG_JSON_NUMBER, float marker, f64 encoding)
+
+#### JSON Array Encoding
+
+**Format:** `TAG_JSON_ARRAY` + `length` + `elements...`
+
+#### JSON Object Encoding
+
+**Format:** `TAG_JSON_OBJECT` + `length` + `(key, value)...`
+
+Keys are encoded as strings, values are recursively encoded as JSON values.
+
+**Examples:**
+- `null` → `[202]`
+- `true` → `[203, 4]` (TAG_JSON_BOOL, TAG_ONE)
+- `"hello"` → `[205, 144]` (TAG_JSON_STRING, string encoding)
+- `[]` → `[206, 3]` (TAG_JSON_ARRAY, length 0)
+- `{}` → `[207, 3]` (TAG_JSON_OBJECT, length 0)
+
 ## 5. Struct and Enum Encoding
 
 ### 5.1 Unit Structs
@@ -343,6 +385,7 @@ Epoch: 1970-01-01
 - New optional fields: Automatically handled (default to None)
 - New required fields: Must have defaults or be made optional
   - In addition to having a Rust default value, you **must** explicitly annotate the field with `#[senax(default)]` to ensure forward/backward compatibility.
+- Fields with `#[senax(skip_default)]`: Only encoded when value differs from default, automatically use default value when missing during decode
 
 **Adding Enum Variants:**
 - Use custom `#[senax(id=n)]` for stable IDs

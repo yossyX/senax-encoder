@@ -8,6 +8,8 @@ use rust_decimal::Decimal;
 use senax_encoder::Decoder;
 use senax_encoder::Encoder;
 use senax_encoder_derive::{Decode, Encode};
+#[cfg(feature = "serde_json")]
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 #[cfg(any(feature = "rust_decimal", feature = "uuid"))]
 use std::str::FromStr;
@@ -725,7 +727,7 @@ fn test_set_and_map_collections() {
         let mut buf = BytesMut::new();
         im.encode(&mut buf).unwrap();
         let mut cur = buf.freeze();
-        let im2 = IndexMap::decode(&mut cur).unwrap();
+        let im2: IndexMap<String, i32> = IndexMap::decode(&mut cur).unwrap();
         assert_eq!(im, im2);
     }
 }
@@ -1716,8 +1718,9 @@ fn test_u8_optimization_boundaries() {
 }
 
 #[test]
-fn test_arc_string_encode_decode() {
-    let values = vec![
+fn test_arc_generic_encode_decode() {
+    // Arc<String>
+    let values_string = vec![
         Arc::new(String::from("")),
         Arc::new(String::from("hello")),
         Arc::new(String::from("こんにちは世界")),
@@ -1725,7 +1728,7 @@ fn test_arc_string_encode_decode() {
             "a very long string with unicode 🚀 and symbols !@#$%^&*()",
         )),
     ];
-    for original in values {
+    for original in values_string {
         let mut buf = BytesMut::new();
         original.encode(&mut buf).unwrap();
         let mut cur = buf.freeze();
@@ -1734,31 +1737,88 @@ fn test_arc_string_encode_decode() {
         // Check that Arc is not the same pointer, but content is equal
         assert!(!Arc::ptr_eq(&original, &decoded) || Arc::strong_count(&original) == 1);
     }
+
+    // Arc<i32>
+    let values_i32 = vec![
+        Arc::new(0i32),
+        Arc::new(42i32),
+        Arc::new(-123i32),
+        Arc::new(i32::MAX),
+        Arc::new(i32::MIN),
+    ];
+    for original in values_i32 {
+        let mut buf = BytesMut::new();
+        original.encode(&mut buf).unwrap();
+        let mut cur = buf.freeze();
+        let decoded = Arc::<i32>::decode(&mut cur).unwrap();
+        assert_eq!(&*original, &*decoded, "Arc<i32> roundtrip failed");
+    }
+
+    // Arc<Vec<u8>>
+    let values_vec = vec![
+        Arc::new(Vec::<u8>::new()),
+        Arc::new(vec![1, 2, 3, 4, 5]),
+        Arc::new(vec![0xFF, 0x00, 0xAB, 0xCD]),
+    ];
+    for original in values_vec {
+        let mut buf = BytesMut::new();
+        original.encode(&mut buf).unwrap();
+        let mut cur = buf.freeze();
+        let decoded = Arc::<Vec<u8>>::decode(&mut cur).unwrap();
+        assert_eq!(&*original, &*decoded, "Arc<Vec<u8>> roundtrip failed");
+    }
+
+    // Arc<Option<String>>
+    let values_option = vec![
+        Arc::new(None::<String>),
+        Arc::new(Some("test".to_string())),
+        Arc::new(Some("".to_string())),
+    ];
+    for original in values_option {
+        let mut buf = BytesMut::new();
+        original.encode(&mut buf).unwrap();
+        let mut cur = buf.freeze();
+        let decoded = Arc::<Option<String>>::decode(&mut cur).unwrap();
+        assert_eq!(
+            &*original, &*decoded,
+            "Arc<Option<String>> roundtrip failed"
+        );
+    }
 }
 
 #[derive(Encode, Decode, Debug, PartialEq)]
-struct ArcStringStruct {
+struct ArcGenericStruct {
     name: Arc<String>,
+    id: Arc<i32>,
+    data: Arc<Vec<u8>>,
     nickname: Option<Arc<String>>,
 }
 
 #[test]
-fn test_struct_with_arc_string_fields() {
+fn test_struct_with_arc_generic_fields() {
     let cases = vec![
-        ArcStringStruct {
+        ArcGenericStruct {
             name: Arc::new("Alice".to_string()),
+            id: Arc::new(42),
+            data: Arc::new(vec![1, 2, 3]),
             nickname: Some(Arc::new("Ally".to_string())),
         },
-        ArcStringStruct {
+        ArcGenericStruct {
             name: Arc::new("Bob".to_string()),
+            id: Arc::new(0),
+            data: Arc::new(Vec::new()),
             nickname: None,
         },
-        ArcStringStruct {
+        ArcGenericStruct {
             name: Arc::new("".to_string()),
+            id: Arc::new(-999),
+            data: Arc::new(vec![0xFF]),
             nickname: Some(Arc::new("".to_string())),
         },
-        ArcStringStruct {
+        ArcGenericStruct {
             name: Arc::new("こんにちは".to_string()),
+            id: Arc::new(i32::MAX),
+            data: Arc::new(vec![0x00, 0x01, 0x02]),
             nickname: Some(Arc::new("世界".to_string())),
         },
     ];
@@ -1766,7 +1826,251 @@ fn test_struct_with_arc_string_fields() {
         let mut buf = BytesMut::new();
         original.encode(&mut buf).unwrap();
         let mut cur = buf.freeze();
-        let decoded = ArcStringStruct::decode(&mut cur).unwrap();
-        assert_eq!(original, decoded, "ArcStringStruct roundtrip failed");
+        let decoded = ArcGenericStruct::decode(&mut cur).unwrap();
+        assert_eq!(original, decoded, "ArcGenericStruct roundtrip failed");
     }
+}
+
+#[test]
+fn test_arc_is_default_behavior() {
+    assert!(Arc::new(String::new()).is_default());
+    assert!(Arc::new("".to_string()).is_default());
+    assert!(!Arc::new("hello".to_string()).is_default());
+    assert!(Arc::new(0i32).is_default());
+    assert!(!Arc::new(1i32).is_default());
+    assert!(Arc::new(Vec::<u8>::new()).is_default());
+    assert!(Arc::new(None::<String>).is_default());
+}
+
+#[test]
+#[cfg(feature = "serde_json")]
+fn test_serde_json_value_encode() {
+    // Test various JSON Value types
+    let test_values: Vec<Value> = vec![
+        Value::Null,
+        Value::Bool(true),
+        Value::Bool(false),
+        json!(42),
+        json!(3.14159),
+        json!("hello world"),
+        json!([1, 2, 3, "four", null]),
+        json!({
+            "name": "Alice",
+            "age": 30,
+            "active": true,
+            "balance": 123.45,
+            "tags": ["user", "premium"],
+            "metadata": {
+                "last_login": "2024-01-01",
+                "preferences": {
+                    "theme": "dark",
+                    "notifications": true
+                }
+            }
+        }),
+    ];
+
+    for original in &test_values {
+        let mut buffer = BytesMut::new();
+        original.encode(&mut buffer).unwrap();
+
+        let mut reader = buffer.freeze();
+        let decoded = Value::decode(&mut reader).unwrap();
+
+        assert_eq!(
+            original, &decoded,
+            "Failed roundtrip for JSON Value: {}",
+            original
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "serde_json")]
+fn test_serde_json_value_complex() {
+    // Test complex nested JSON structure
+    let complex_json = json!({
+        "users": [
+            {
+                "id": 1,
+                "name": "Alice",
+                "profile": {
+                    "email": "alice@example.com",
+                    "verified": true,
+                    "scores": [95.5, 87.2, 91.0]
+                }
+            },
+            {
+                "id": 2,
+                "name": "Bob",
+                "profile": {
+                    "email": "bob@example.com",
+                    "verified": false,
+                    "scores": null
+                }
+            }
+        ],
+        "metadata": {
+            "total": 2,
+            "last_updated": "2024-01-01T00:00:00Z",
+            "features": {
+                "advanced_search": true,
+                "notifications": false
+            }
+        }
+    });
+
+    let mut buffer = BytesMut::new();
+    complex_json.encode(&mut buffer).unwrap();
+
+    let mut reader = buffer.freeze();
+    let decoded = Value::decode(&mut reader).unwrap();
+
+    assert_eq!(complex_json, decoded);
+}
+
+#[test]
+#[cfg(feature = "serde_json")]
+fn test_serde_json_value_in_struct() {
+    // Test JSON Value as struct field
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct ConfigStruct {
+        name: String,
+        config: Value,
+        enabled: bool,
+    }
+
+    let original = ConfigStruct {
+        name: "app_config".to_string(),
+        config: json!({
+            "database": {
+                "host": "localhost",
+                "port": 5432,
+                "ssl": true
+            },
+            "cache": {
+                "ttl": 3600,
+                "enabled": true
+            },
+            "features": ["analytics", "auth", "notifications"]
+        }),
+        enabled: true,
+    };
+
+    let mut buffer = BytesMut::new();
+    original.encode(&mut buffer).unwrap();
+
+    let mut reader = buffer.freeze();
+    let decoded = ConfigStruct::decode(&mut reader).unwrap();
+
+    assert_eq!(original, decoded);
+}
+
+#[test]
+#[cfg(feature = "serde_json")]
+fn test_serde_json_value_empty_containers() {
+    // Test empty arrays and objects
+    let test_values: Vec<Value> = vec![
+        json!([]),
+        json!({}),
+        json!({
+            "empty_array": [],
+            "empty_object": {},
+            "nested": {
+                "also_empty": []
+            }
+        }),
+    ];
+
+    for original in &test_values {
+        let mut buffer = BytesMut::new();
+        original.encode(&mut buffer).unwrap();
+
+        let mut reader = buffer.freeze();
+        let decoded = Value::decode(&mut reader).unwrap();
+
+        assert_eq!(original, &decoded);
+    }
+}
+
+#[test]
+fn test_is_default_method() {
+    use senax_encoder::Encoder;
+
+    // Test primitive types
+    assert!(0u32.is_default());
+    assert!(!42u32.is_default());
+    assert!(0i32.is_default());
+    assert!(!(-5i32).is_default());
+    assert!(false.is_default());
+    assert!(!true.is_default());
+    assert!(0.0f64.is_default());
+    assert!(!3.14f64.is_default());
+
+    // Test String
+    assert!("".to_string().is_default());
+    assert!(!"hello".to_string().is_default());
+
+    // Test Option
+    assert!(Option::<i32>::None.is_default());
+    assert!(!Some(42).is_default());
+
+    // Test Vec
+    assert!(Vec::<i32>::new().is_default());
+    assert!(!vec![1, 2, 3].is_default());
+
+    // Test tuples
+    assert!(().is_default());
+    assert!((0, "".to_string()).is_default());
+    assert!(!(42, "hello".to_string()).is_default());
+}
+
+#[test]
+fn test_skip_default_attribute() {
+    use senax_encoder::{Decoder, Encoder};
+
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct TestSkipDefault {
+        #[senax(skip_default)]
+        optional_field: i32,
+        normal_field: String,
+        #[senax(skip_default)]
+        default_string: String,
+    }
+
+    // Test with default values - should be skipped during encoding
+    let test_default = TestSkipDefault {
+        optional_field: 0, // default value
+        normal_field: "hello".to_string(),
+        default_string: "".to_string(), // default value
+    };
+
+    let mut buffer = BytesMut::new();
+    test_default.encode(&mut buffer).unwrap();
+    let buffer1_len = buffer.len();
+
+    // Decode and verify
+    let mut reader = buffer.freeze();
+    let decoded = TestSkipDefault::decode(&mut reader).unwrap();
+    assert_eq!(test_default, decoded);
+
+    // Test with non-default values - should be encoded
+    let test_non_default = TestSkipDefault {
+        optional_field: 42, // non-default value
+        normal_field: "world".to_string(),
+        default_string: "non-empty".to_string(), // non-default value
+    };
+
+    let mut buffer2 = BytesMut::new();
+    test_non_default.encode(&mut buffer2).unwrap();
+    let buffer2_len = buffer2.len();
+
+    // Decode and verify
+    let mut reader2 = buffer2.freeze();
+    let decoded2 = TestSkipDefault::decode(&mut reader2).unwrap();
+    assert_eq!(test_non_default, decoded2);
+
+    // Buffer with default values should be smaller than buffer with non-default values
+    // (since default fields are skipped)
+    assert!(buffer1_len < buffer2_len);
 }

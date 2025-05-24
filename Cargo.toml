@@ -3,7 +3,7 @@ members = ["derive"]
 
 [package]
 name = "senax-encoder"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "A fast, compact, and schema-evolution-friendly binary serialization library for Rust."
 authors = ["yossyX"]
@@ -12,19 +12,20 @@ repository = "https://github.com/yossyX/senax-encoder"
 keywords = ["senax", "encode", "serialize", "serializer"]
 
 [features]
-all = ["indexmap", "chrono", "rust_decimal", "uuid", "ulid"]
 indexmap = ["dep:indexmap"]
 chrono = ["dep:chrono"]
 rust_decimal = ["dep:rust_decimal"]
 uuid = ["dep:uuid"]
 ulid = ["dep:ulid"]
+serde_json = ["dep:serde_json"]
 
 [dependencies]
 thiserror = "1.0"
-senax-encoder-derive = { path = "./derive", version = "0.1.0" }
+senax-encoder-derive = { path = "./derive", version = "0.1.2" }
 bytes = "1.5"
 indexmap = { version = "2.2", optional = true }
 chrono = { version = "0.4", optional = true }
 rust_decimal = { version = "1.35", optional = true }
 uuid = { version = "1.8", features = ["v4"], optional = true }
 ulid = { version = "1.1", optional = true }
+serde_json = { version = "1.0", optional = true }

@@ -15,6 +15,7 @@
 //! - `#[senax(default)]` — If a field is missing during decoding, its value is set to `Default::default()` instead of causing an error. For `Option<T>`, this means `None`.
 //! - `#[senax(skip_encode)]` — This field is not written during encoding. On decode, it is set to `Default::default()`.
 //! - `#[senax(skip_decode)]` — This field is ignored during decoding and always set to `Default::default()`. It is still encoded if present.
+//! - `#[senax(skip_default)]` — This field is not written during encoding if its value equals the default value. On decode, missing fields are set to `Default::default()`.
 //! - `#[senax(rename = "name")]` — Use the given string as the logical field/variant name for ID calculation. Useful for renaming fields/variants while keeping the same wire format.
 //! - `#[senax(u8)]` — On structs/enums, encodes field/variant IDs as `u8` instead of `u32` (for compactness, up to 255 IDs; 0 is reserved for terminator).
 //!
@@ -22,12 +23,12 @@
 //!
 //! The following optional features enable support for popular crates and types:
 //!
-//! - `all` — Enables all optional features below at once: `indexmap`, `chrono`, `rust_decimal`, `uuid`, `ulid`.
 //! - `chrono` — Enables encoding/decoding of `chrono::DateTime`, `NaiveDate`, and `NaiveTime` types.
 //! - `uuid` — Enables encoding/decoding of `uuid::Uuid`.
 //! - `ulid` — Enables encoding/decoding of `ulid::Ulid` (shares the same tag as UUID for binary compatibility).
 //! - `rust_decimal` — Enables encoding/decoding of `rust_decimal::Decimal`.
 //! - `indexmap` — Enables encoding/decoding of `IndexMap` and `IndexSet` collections.
+//! - `serde_json` — Enables encoding/decoding of `serde_json::Value` (JSON values as dynamic type).
 //!
 //! ## Example
 //! ```rust
@@ -55,6 +56,8 @@ use indexmap::{IndexMap, IndexSet};
 #[cfg(feature = "rust_decimal")]
 use rust_decimal::Decimal;
 pub use senax_encoder_derive::{Decode, Encode};
+#[cfg(feature = "serde_json")]
+use serde_json::{Map, Number, Value};
 use std::collections::HashMap;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
@@ -99,6 +102,10 @@ pub trait Encoder {
     /// # Arguments
     /// * `writer` - The buffer to write the encoded bytes into.
     fn encode(&self, writer: &mut BytesMut) -> Result<()>;
+
+    /// Returns true if this value equals its default value.
+    /// Used by `#[senax(skip_default)]` attribute to skip encoding default values.
+    fn is_default(&self) -> bool;
 }
 
 /// Trait for types that can be decoded from the senax binary format.
@@ -186,6 +193,12 @@ pub const TAG_DECIMAL: u8 = 200;
 ///< rust_decimal::Decimal
 pub const TAG_UUID: u8 = 201;
 ///< uuid::Uuid, ulid::Ulid
+pub const TAG_JSON_NULL: u8 = 202;
+pub const TAG_JSON_BOOL: u8 = 203; // Uses existing TAG_ZERO/TAG_ONE for value
+pub const TAG_JSON_NUMBER: u8 = 204;
+pub const TAG_JSON_STRING: u8 = 205; // Uses existing string encoding
+pub const TAG_JSON_ARRAY: u8 = 206;
+pub const TAG_JSON_OBJECT: u8 = 207;
 
 // --- bool ---
 /// Encodes a `bool` as a single tag byte: `TAG_ZERO` for `false`, `TAG_ONE` for `true`.
@@ -194,6 +207,10 @@ impl Encoder for bool {
         let tag = if !*self { TAG_ZERO } else { TAG_ONE }; // 3: false, 4: true
         writer.put_u8(tag);
         Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        !(*self)
     }
 }
 /// Decodes a `bool` from a single tag byte.
@@ -382,6 +399,10 @@ impl Encoder for u8 {
         }
         Ok(())
     }
+
+    fn is_default(&self) -> bool {
+        *self == 0
+    }
 }
 /// Decodes a `u8` from the compact format.
 impl Decoder for u8 {
@@ -406,6 +427,10 @@ impl Encoder for u16 {
             writer.put_u16_le(*self);
         }
         Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        *self == 0
     }
 }
 impl Decoder for u16 {
@@ -432,6 +457,10 @@ impl Encoder for u32 {
             writer.put_u32_le(*self);
         }
         Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        *self == 0
     }
 }
 impl Decoder for u32 {
@@ -461,6 +490,10 @@ impl Encoder for u64 {
             writer.put_u64_le(*self);
         }
         Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        *self == 0
     }
 }
 impl Decoder for u64 {
@@ -494,6 +527,10 @@ impl Encoder for u128 {
         }
         Ok(())
     }
+
+    fn is_default(&self) -> bool {
+        *self == 0
+    }
 }
 impl Decoder for u128 {
     fn decode(reader: &mut Bytes) -> Result<Self> {
@@ -521,6 +558,10 @@ impl Encoder for usize {
             let v = *self as u128;
             v.encode(writer)
         }
+    }
+
+    fn is_default(&self) -> bool {
+        *self == 0
     }
 }
 impl Decoder for usize {
@@ -555,6 +596,10 @@ impl Encoder for i8 {
             let inv = !(*self as u8);
             inv.encode(writer)
         }
+    }
+
+    fn is_default(&self) -> bool {
+        *self == 0
     }
 }
 /// Decodes a `i8` from the bit-inverted encoding.
@@ -596,6 +641,10 @@ impl Encoder for i16 {
             inv.encode(writer)
         }
     }
+
+    fn is_default(&self) -> bool {
+        *self == 0
+    }
 }
 impl Decoder for i16 {
     fn decode(reader: &mut Bytes) -> Result<Self> {
@@ -631,6 +680,10 @@ impl Encoder for i32 {
             let inv = !(*self as u32);
             inv.encode(writer)
         }
+    }
+
+    fn is_default(&self) -> bool {
+        *self == 0
     }
 }
 impl Decoder for i32 {
@@ -668,6 +721,10 @@ impl Encoder for i64 {
             inv.encode(writer)
         }
     }
+
+    fn is_default(&self) -> bool {
+        *self == 0
+    }
 }
 impl Decoder for i64 {
     fn decode(reader: &mut Bytes) -> Result<Self> {
@@ -703,6 +760,10 @@ impl Encoder for i128 {
             let inv = !(*self as u128);
             inv.encode(writer)
         }
+    }
+
+    fn is_default(&self) -> bool {
+        *self == 0
     }
 }
 impl Decoder for i128 {
@@ -746,6 +807,10 @@ impl Encoder for isize {
             v.encode(writer)
         }
     }
+
+    fn is_default(&self) -> bool {
+        *self == 0
+    }
 }
 impl Decoder for isize {
     fn decode(reader: &mut Bytes) -> Result<Self> {
@@ -771,6 +836,10 @@ impl Encoder for f32 {
         writer.put_u8(TAG_F32);
         writer.put_f32_le(*self);
         Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        *self == 0.0
     }
 }
 /// Decodes an `f32` from either 4 or 8 bytes (accepts f64 for compatibility).
@@ -808,6 +877,10 @@ impl Encoder for f64 {
         writer.put_u8(TAG_F64);
         writer.put_f64_le(*self);
         Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        *self == 0.0
     }
 }
 /// Decodes an `f64` from either 8 or 4 bytes (accepts f32 for compatibility).
@@ -857,6 +930,10 @@ impl Encoder for String {
         }
         Ok(())
     }
+
+    fn is_default(&self) -> bool {
+        self.is_empty()
+    }
 }
 /// Decodes a `String` from the senax binary format.
 impl Decoder for String {
@@ -900,6 +977,10 @@ impl<T: Encoder> Encoder for Option<T> {
                 Ok(())
             }
         }
+    }
+
+    fn is_default(&self) -> bool {
+        self.is_none()
     }
 }
 /// Decodes an `Option<T>` from the senax binary format.
@@ -956,6 +1037,10 @@ impl<T: Encoder + 'static> Encoder for Vec<T> {
             }
             Ok(())
         }
+    }
+
+    fn is_default(&self) -> bool {
+        self.is_empty()
     }
 }
 /// Decodes a `Vec<T>` from the senax binary format.
@@ -1017,6 +1102,10 @@ impl<T: Encoder, const N: usize> Encoder for [T; N] {
         }
         Ok(())
     }
+
+    fn is_default(&self) -> bool {
+        self.iter().all(|item| item.is_default())
+    }
 }
 /// Decodes a fixed-size array from the senax binary format.
 impl<T: Decoder, const N: usize> Decoder for [T; N] {
@@ -1063,6 +1152,10 @@ impl Encoder for () {
                 0usize.encode(writer)?;
         Ok(())
     }
+
+    fn is_default(&self) -> bool {
+        true
+    }
 }
 impl Decoder for () {
     fn decode(reader: &mut Bytes) -> Result<Self> {
@@ -1091,6 +1184,10 @@ impl Decoder for () {
                     self.$idx.encode(writer)?;
                 )+
         Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        $(self.$idx.is_default())&&+
     }
 }
         impl<$($T: Decoder),+> Decoder for ($($T,)+) {
@@ -1145,6 +1242,10 @@ impl<K: Encoder, V: Encoder> Encoder for HashMap<K, V> {
             v.encode(writer)?;
         }
         Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        self.is_empty()
     }
 }
 /// Decodes a map from the senax binary format.
@@ -1396,6 +1497,53 @@ pub fn skip_value(reader: &mut Bytes) -> Result<()> {
             reader.advance(16);
             Ok(())
         }
+        TAG_JSON_NULL => Ok(()),
+        TAG_JSON_BOOL => Ok(()),
+        TAG_JSON_NUMBER => {
+            // Number has type marker + actual number
+            if reader.remaining() == 0 {
+                return Err(EncoderError::InsufficientData);
+            }
+            let number_type = reader.get_u8();
+            match number_type {
+                0 => {
+                    u64::decode(reader)?;
+                }
+                1 => {
+                    i64::decode(reader)?;
+                }
+                2 => {
+                    f64::decode(reader)?;
+                }
+                _ => {
+                    return Err(EncoderError::Decode(format!(
+                        "Invalid JSON Number type marker: {}",
+                        number_type
+                    )));
+                }
+            }
+            Ok(())
+        }
+        TAG_JSON_STRING => {
+            // String uses regular string encoding
+            String::decode(reader)?;
+            Ok(())
+        }
+        TAG_JSON_ARRAY => {
+            let len = usize::decode(reader)?;
+            for _ in 0..len {
+                skip_value(reader)?;
+            }
+            Ok(())
+        }
+        TAG_JSON_OBJECT => {
+            let len = usize::decode(reader)?;
+            for _ in 0..len {
+                String::decode(reader)?; // key
+                skip_value(reader)?; // value
+            }
+            Ok(())
+        }
         TAG_NONE | TAG_SOME => {
             // These should have been handled by Option<T> decode or skip_value for T
             // For TAG_NONE, it's fine. For TAG_SOME, we need to skip the inner value.
@@ -1432,6 +1580,10 @@ impl<T: Encoder + Eq + std::hash::Hash> Encoder for HashSet<T> {
         }
         Ok(())
     }
+
+    fn is_default(&self) -> bool {
+        self.is_empty()
+    }
 }
 /// Decodes a set from the senax binary format.
 impl<T: Decoder + Eq + std::hash::Hash + 'static> Decoder for HashSet<T> {
@@ -1459,6 +1611,10 @@ impl<T: Encoder + Ord> Encoder for BTreeSet<T> {
             }
         }
         Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        self.is_empty()
     }
 }
 impl<T: Decoder + Ord + 'static> Decoder for BTreeSet<T> {
@@ -1488,6 +1644,10 @@ impl<T: Encoder + Eq + std::hash::Hash> Encoder for IndexSet<T> {
         }
         Ok(())
     }
+
+    fn is_default(&self) -> bool {
+        self.is_empty()
+    }
 }
 #[cfg(feature = "indexmap")]
 impl<T: Decoder + Eq + std::hash::Hash + 'static> Decoder for IndexSet<T> {
@@ -1507,6 +1667,10 @@ impl<K: Encoder + Ord, V: Encoder> Encoder for BTreeMap<K, V> {
             v.encode(writer)?;
         }
         Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        self.is_empty()
     }
 }
 impl<K: Decoder + Ord, V: Decoder> Decoder for BTreeMap<K, V> {
@@ -1543,6 +1707,10 @@ impl<K: Encoder + Eq + std::hash::Hash, V: Encoder> Encoder for IndexMap<K, V> {
             v.encode(writer)?;
         }
         Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        self.is_empty()
     }
 }
 #[cfg(feature = "indexmap")]
@@ -1581,6 +1749,10 @@ impl Encoder for DateTime<Utc> {
         timestamp_nanos.encode(writer)?;
         Ok(())
     }
+
+    fn is_default(&self) -> bool {
+        *self == DateTime::<Utc>::default()
+    }
 }
 /// Decodes a `chrono::DateTime<Utc>` from the senax binary format.
 #[cfg(feature = "chrono")]
@@ -1618,6 +1790,10 @@ impl Encoder for DateTime<Local> {
         timestamp_seconds.encode(writer)?;
         timestamp_nanos.encode(writer)?;
         Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        *self == DateTime::<Local>::default()
     }
 }
 #[cfg(feature = "chrono")]
@@ -1658,6 +1834,10 @@ impl Encoder for NaiveDate {
         days_from_epoch.encode(writer)?;
         Ok(())
     }
+
+    fn is_default(&self) -> bool {
+        *self == NaiveDate::default()
+    }
 }
 #[cfg(feature = "chrono")]
 impl Decoder for NaiveDate {
@@ -1694,6 +1874,10 @@ impl Encoder for NaiveTime {
         nanoseconds.encode(writer)?;
         Ok(())
     }
+
+    fn is_default(&self) -> bool {
+        *self == NaiveTime::default()
+    }
 }
 #[cfg(feature = "chrono")]
 impl Decoder for NaiveTime {
@@ -1728,6 +1912,10 @@ impl Encoder for Bytes {
         len.encode(writer)?;
         writer.put_slice(self);
         Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        self.is_empty()
     }
 }
 impl Decoder for Bytes {
@@ -1771,6 +1959,10 @@ impl Encoder for Decimal {
         scale.encode(writer)?;
         Ok(())
     }
+
+    fn is_default(&self) -> bool {
+        *self == Decimal::default()
+    }
 }
 #[cfg(feature = "rust_decimal")]
 impl Decoder for Decimal {
@@ -1807,6 +1999,10 @@ impl Encoder for Uuid {
         writer.put_u128_le(uuid_u128);
         Ok(())
     }
+
+    fn is_default(&self) -> bool {
+        *self == Uuid::default()
+    }
 }
 #[cfg(feature = "uuid")]
 impl Decoder for Uuid {
@@ -1839,6 +2035,10 @@ impl Encoder for Ulid {
         writer.put_u128_le(ulid_u128);
         Ok(())
     }
+
+    fn is_default(&self) -> bool {
+        *self == Ulid::default()
+    }
 }
 #[cfg(feature = "ulid")]
 impl Decoder for Ulid {
@@ -1861,14 +2061,158 @@ impl Decoder for Ulid {
     }
 }
 
-// --- Arc<String> ---
-impl Encoder for Arc<String> {
+// --- Arc<T> ---
+/// Encodes an `Arc<T>` by encoding the inner value.
+impl<T: Encoder> Encoder for Arc<T> {
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         (**self).encode(writer)
     }
+
+    fn is_default(&self) -> bool {
+        T::is_default(self)
+    }
 }
-impl Decoder for Arc<String> {
+
+/// Decodes an `Arc<T>` by decoding the inner value and wrapping it in an Arc.
+impl<T: Decoder> Decoder for Arc<T> {
     fn decode(reader: &mut Bytes) -> Result<Self> {
-        Ok(Arc::new(String::decode(reader)?))
+        Ok(Arc::new(T::decode(reader)?))
+    }
+}
+
+// --- serde_json::Value ---
+#[cfg(feature = "serde_json")]
+impl Encoder for Value {
+    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+        match self {
+            Value::Null => {
+                writer.put_u8(TAG_JSON_NULL);
+                Ok(())
+            }
+            Value::Bool(b) => {
+                writer.put_u8(TAG_JSON_BOOL);
+                b.encode(writer)?;
+                Ok(())
+            }
+            Value::Number(n) => {
+                writer.put_u8(TAG_JSON_NUMBER);
+                // Preserve integer/float distinction where possible
+                if let Some(u) = n.as_u64() {
+                    // Encode as tagged unsigned integer
+                    writer.put_u8(0); // Unsigned integer (u64) marker
+                    u.encode(writer)?;
+                } else if let Some(i) = n.as_i64() {
+                    // Encode as tagged signed integer
+                    writer.put_u8(1); // Signed integer (i64) marker
+                    i.encode(writer)?;
+                } else {
+                    // Encode as float
+                    writer.put_u8(2); // Float marker
+                    let float_val = n.as_f64().unwrap_or(0.0);
+                    float_val.encode(writer)?;
+                }
+                Ok(())
+            }
+            Value::String(s) => {
+                writer.put_u8(TAG_JSON_STRING);
+                s.encode(writer)?;
+                Ok(())
+            }
+            Value::Array(arr) => {
+                writer.put_u8(TAG_JSON_ARRAY);
+                let len = arr.len();
+                len.encode(writer)?;
+                for item in arr {
+                    item.encode(writer)?;
+                }
+                Ok(())
+            }
+            Value::Object(obj) => {
+                writer.put_u8(TAG_JSON_OBJECT);
+                let len = obj.len();
+                len.encode(writer)?;
+                for (key, value) in obj {
+                    key.encode(writer)?;
+                    value.encode(writer)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        *self == Value::default()
+    }
+}
+
+#[cfg(feature = "serde_json")]
+impl Decoder for Value {
+    fn decode(reader: &mut Bytes) -> Result<Self> {
+        if reader.remaining() == 0 {
+            return Err(EncoderError::InsufficientData);
+        }
+        let tag = reader.get_u8();
+        match tag {
+            TAG_JSON_NULL => Ok(Value::Null),
+            TAG_JSON_BOOL => {
+                let b = bool::decode(reader)?;
+                Ok(Value::Bool(b))
+            }
+            TAG_JSON_NUMBER => {
+                if reader.remaining() == 0 {
+                    return Err(EncoderError::InsufficientData);
+                }
+                let number_type = reader.get_u8();
+                match number_type {
+                    0 => {
+                        // Unsigned integer
+                        let u = u64::decode(reader)?;
+                        Ok(Value::Number(Number::from(u)))
+                    }
+                    1 => {
+                        // Signed integer
+                        let i = i64::decode(reader)?;
+                        Ok(Value::Number(Number::from(i)))
+                    }
+                    2 => {
+                        // Float
+                        let f = f64::decode(reader)?;
+                        Ok(Value::Number(
+                            Number::from_f64(f).unwrap_or(Number::from(0)),
+                        ))
+                    }
+                    _ => Err(EncoderError::Decode(format!(
+                        "Invalid JSON Number type marker: {}",
+                        number_type
+                    ))),
+                }
+            }
+            TAG_JSON_STRING => {
+                let s = String::decode(reader)?;
+                Ok(Value::String(s))
+            }
+            TAG_JSON_ARRAY => {
+                let len = usize::decode(reader)?;
+                let mut arr = Vec::with_capacity(len);
+                for _ in 0..len {
+                    arr.push(Value::decode(reader)?);
+                }
+                Ok(Value::Array(arr))
+            }
+            TAG_JSON_OBJECT => {
+                let len = usize::decode(reader)?;
+                let mut obj = Map::with_capacity(len);
+                for _ in 0..len {
+                    let key = String::decode(reader)?;
+                    let value = Value::decode(reader)?;
+                    obj.insert(key, value);
+                }
+                Ok(Value::Object(obj))
+            }
+            _ => Err(EncoderError::Decode(format!(
+                "Expected JSON Value tag (202-207), got {}",
+                tag
+            ))),
+        }
     }
 }

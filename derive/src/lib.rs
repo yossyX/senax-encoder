@@ -38,6 +38,7 @@ fn calculate_id_from_name(name: &str) -> u32 {
 /// * `default` - Whether to use default values when the field is missing during decode
 /// * `skip_encode` - Whether to exclude this field from encoding
 /// * `skip_decode` - Whether to ignore this field during decoding
+/// * `skip_default` - Whether to use default value if field is missing
 /// * `rename` - Optional alternative name for ID calculation (maintains compatibility when renaming)
 #[derive(Debug, Clone)]
 #[allow(dead_code)] // The rename field is used indirectly in ID calculation
@@ -46,6 +47,7 @@ struct FieldAttributes {
     default: bool,
     skip_encode: bool,
     skip_decode: bool,
+    skip_default: bool,
     rename: Option<String>,
 }
 
@@ -70,6 +72,7 @@ struct FieldAttributes {
 /// * `#[senax(default)]` - Use default value if field is missing during decode
 /// * `#[senax(skip_encode)]` - Skip this field during encoding
 /// * `#[senax(skip_decode)]` - Skip this field during decoding
+/// * `#[senax(skip_default)]` - Skip encoding if field value is default, use default if missing during decode
 /// * `#[senax(rename="name")]` - Alternative name for ID calculation
 ///
 /// Multiple attributes can be combined: `#[senax(id=123, default, skip_encode)]`
@@ -78,16 +81,18 @@ fn get_field_attributes(attrs: &[Attribute], field_name: &str) -> FieldAttribute
     let mut default = false;
     let mut skip_encode = false;
     let mut skip_decode = false;
+    let mut skip_default = false;
     let mut rename = None;
 
     for attr in attrs {
         if attr.path().is_ident("senax") {
-            // Try to parse #[senax(id=1234, default, skip_encode, skip_decode, rename="name")]
+            // Try to parse #[senax(id=1234, default, skip_encode, skip_decode, skip_default, rename="name")]
             let parsed = attr.parse_args_with(|input: syn::parse::ParseStream| {
                 let mut parsed_id = None;
                 let mut parsed_default = false;
                 let mut parsed_skip_encode = false;
                 let mut parsed_skip_decode = false;
+                let mut parsed_skip_default = false;
                 let mut parsed_rename = None;
 
                 while !input.is_empty() {
@@ -113,6 +118,8 @@ fn get_field_attributes(attrs: &[Attribute], field_name: &str) -> FieldAttribute
                         parsed_skip_encode = true;
                     } else if ident == "skip_decode" {
                         parsed_skip_decode = true;
+                    } else if ident == "skip_default" {
+                        parsed_skip_default = true;
                     } else if ident == "rename" {
                         input.parse::<syn::Token![=]>()?;
                         let lit_str = input.parse::<syn::LitStr>()?;
@@ -135,6 +142,7 @@ fn get_field_attributes(attrs: &[Attribute], field_name: &str) -> FieldAttribute
                     parsed_default,
                     parsed_skip_encode,
                     parsed_skip_decode,
+                    parsed_skip_default,
                     parsed_rename,
                 ))
             });
@@ -144,6 +152,7 @@ fn get_field_attributes(attrs: &[Attribute], field_name: &str) -> FieldAttribute
                 parsed_default,
                 parsed_skip_encode,
                 parsed_skip_decode,
+                parsed_skip_default,
                 parsed_rename,
             )) = parsed
             {
@@ -153,6 +162,7 @@ fn get_field_attributes(attrs: &[Attribute], field_name: &str) -> FieldAttribute
                 default = default || parsed_default;
                 skip_encode = skip_encode || parsed_skip_encode;
                 skip_decode = skip_decode || parsed_skip_decode;
+                skip_default = skip_default || parsed_skip_default;
                 if let Some(rename_val) = parsed_rename {
                     rename = Some(rename_val);
                 }
@@ -180,6 +190,7 @@ fn get_field_attributes(attrs: &[Attribute], field_name: &str) -> FieldAttribute
         default,
         skip_encode,
         skip_decode,
+        skip_default,
         rename,
     }
 }
@@ -325,6 +336,29 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                                 }
                             });
                         }
+                    } else if field_attrs.skip_default {
+                        // For skip_default fields, check if the value is default before encoding
+                        if container_id_u8 {
+                            field_encode.push(quote! {
+                                if !self.#field_ident.is_default() {
+                                    let field_id_val: u8 = #field_id as u8;
+                                    writer.put_u8(field_id_val);
+                                    self.#field_ident.encode(writer)?;
+                                }
+                            });
+                        } else {
+                            field_encode.push(quote! {
+                                if !self.#field_ident.is_default() {
+                                    let field_id_val: u32 = #field_id;
+                                    if #container_id_u8 {
+                                        writer.put_u8(field_id_val as u8);
+                                    } else {
+                                        senax_encoder::write_u32_le(writer, field_id_val)?;
+                                    }
+                                    self.#field_ident.encode(writer)?;
+                                }
+                            });
+                        }
                     } else if container_id_u8 {
                         field_encode.push(quote! {
                             let field_id_val: u8 = #field_id as u8;
@@ -427,6 +461,19 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                                         val.encode(writer)?;
                                     }
                                 });
+                            } else if field_attrs.skip_default {
+                                // For skip_default fields, check if the value is default before encoding
+                                field_encode.push(quote! {
+                                    if !#field_ident.is_default() {
+                                        let field_id_val: u32 = #field_id;
+                                        if #container_id_u8 {
+                                            writer.put_u8(field_id_val as u8);
+                                        } else {
+                                            senax_encoder::write_u32_le(writer, field_id_val)?;
+                                        }
+                                        #field_ident.encode(writer)?;
+                                    }
+                                });
                             } else {
                                 field_encode.push(quote! {
                                     let field_id_val: u32 = #field_id;
@@ -519,6 +566,10 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                 #encode_fields
                 Ok(())
             }
+
+            fn is_default(&self) -> bool {
+                false // Structs and enums always return false
+            }
         }
     })
 }
@@ -534,6 +585,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
 /// * `#[senax(id=N)]` - Set explicit field/variant ID
 /// * `#[senax(default)]` - Use default value if field is missing
 /// * `#[senax(skip_decode)]` - Skip field during decoding (use default value)
+/// * `#[senax(skip_default)]` - Use default value if field is missing (same as default for decode)
 /// * `#[senax(rename="name")]` - Use alternative name for ID calculation
 ///
 /// # Examples
@@ -643,8 +695,8 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                             quote! {
                                 #ident: field_values.#ident,
                             }
-                        } else if attrs.default {
-                            // Fields marked with default use default value if missing
+                        } else if attrs.default || attrs.skip_default {
+                            // Fields marked with default or skip_default use default value if missing
                             quote! {
                                 #ident: field_values.#ident.unwrap_or_default(),
                             }
@@ -809,8 +861,8 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                             } else if is_option_type(ty) {
                                 struct_assignments_enum_named
                                     .push(quote! { #ident: field_values.#ident, });
-                            } else if attrs.default {
-                                // Fields marked with default use default value if missing
+                            } else if attrs.default || attrs.skip_default {
+                                // Fields marked with default or skip_default use default value if missing
                                 struct_assignments_enum_named.push(quote! {
                                     #ident: field_values.#ident.unwrap_or_default(),
                                 });
