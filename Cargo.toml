@@ -3,7 +3,7 @@ members = ["derive"]
 
 [package]
 name = "senax-encoder"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 description = "A fast, compact, and schema-evolution-friendly binary serialization library for Rust."
 authors = ["yossyX"]
@@ -11,6 +11,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/yossyX/senax-encoder"
 keywords = ["senax", "encode", "serialize", "serializer", "binary"]
 categories = ["encoding"]
+readme = "README.md"
 
 [features]
 indexmap = ["dep:indexmap"]
