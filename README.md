@@ -1,4 +1,4 @@
-[![Latest version](https://img.shields.io/crates/v/senax.svg)](https://crates.io/crates/senax-encoder)
+[![Latest version](https://img.shields.io/crates/v/senax-encoder.svg)](https://crates.io/crates/senax-encoder)
 
 # senax-encoder
 

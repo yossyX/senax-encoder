@@ -97,6 +97,63 @@ pub enum EncoderError {
 /// All `Encode` and `Decode` trait methods return this type.
 pub type Result<T> = std::result::Result<T, EncoderError>;
 
+/// Convenience function to decode a value from bytes.
+///
+/// This is equivalent to calling `T::decode(reader)` but provides a more ergonomic API.
+///
+/// # Arguments
+/// * `reader` - The buffer to read the encoded bytes from.
+///
+/// # Example
+/// ```rust
+/// use senax_encoder::{decode, Encoder, Decoder, Encode, Decode};
+/// use bytes::BytesMut;
+///
+/// #[derive(Encode, Decode, PartialEq, Debug)]
+/// struct MyStruct {
+///     id: u32,
+///     name: String,
+/// }
+///
+/// let value = MyStruct { id: 42, name: "hello".to_string() };
+/// let mut buf = BytesMut::new();
+/// value.encode(&mut buf).unwrap();
+/// let decoded: MyStruct = decode(&mut buf.freeze()).unwrap();
+/// assert_eq!(value, decoded);
+/// ```
+pub fn decode<T: Decoder>(reader: &mut Bytes) -> Result<T> {
+    T::decode(reader)
+}
+
+/// Convenience function to encode a value to bytes.
+///
+/// This is equivalent to calling `value.encode(writer)` but provides a more ergonomic API.
+///
+/// # Arguments
+/// * `value` - The value to encode.
+/// * `writer` - The buffer to write the encoded bytes into.
+///
+/// # Example
+/// ```rust
+/// use senax_encoder::{encode, Encoder, Decoder, Encode, Decode};
+/// use bytes::BytesMut;
+///
+/// #[derive(Encode, Decode, PartialEq, Debug)]
+/// struct MyStruct {
+///     id: u32,
+///     name: String,
+/// }
+///
+/// let value = MyStruct { id: 42, name: "hello".to_string() };
+/// let mut buf = BytesMut::new();
+/// encode(&value, &mut buf).unwrap();
+/// let decoded: MyStruct = MyStruct::decode(&mut buf.freeze()).unwrap();
+/// assert_eq!(value, decoded);
+/// ```
+pub fn encode<T: Encoder>(value: &T, writer: &mut BytesMut) -> Result<()> {
+    value.encode(writer)
+}
+
 /// Trait for types that can be encoded into the senax binary format.
 ///
 /// Implement this trait for your type to enable serialization.
