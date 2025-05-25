@@ -2256,3 +2256,14 @@ pub fn read_field_id_optimized(reader: &mut Bytes) -> Result<u64> {
         Ok(first_byte as u64)
     }
 }
+
+/// Implementation for references - delegates to the referenced value
+impl<T: Encoder> Encoder for &T {
+    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+        (*self).encode(writer)
+    }
+
+    fn is_default(&self) -> bool {
+        (*self).is_default()
+    }
+}

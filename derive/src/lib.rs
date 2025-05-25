@@ -307,7 +307,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                         field_encode.push(quote! {
                             if let Some(val) = &self.#field_ident {
                                 senax_encoder::write_field_id_optimized(writer, #field_id)?;
-                                val.encode(writer)?;
+                                senax_encoder::Encoder::encode(&val, writer)?;
                             }
                         });
                     } else if field_attrs.skip_default {
@@ -315,13 +315,13 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                         field_encode.push(quote! {
                             if senax_encoder::Encoder::is_default(&self.#field_ident) == false {
                                 senax_encoder::write_field_id_optimized(writer, #field_id)?;
-                                self.#field_ident.encode(writer)?;
+                                senax_encoder::Encoder::encode(&self.#field_ident, writer)?;
                             }
                         });
                     } else {
                         field_encode.push(quote! {
                             senax_encoder::write_field_id_optimized(writer, #field_id)?;
-                            self.#field_ident.encode(writer)?;
+                            senax_encoder::Encoder::encode(&self.#field_ident, writer)?;
                         });
                     }
                 }
@@ -336,13 +336,13 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                 let field_encode = fields.unnamed.iter().enumerate().map(|(i, _)| {
                     let index = syn::Index::from(i);
                     quote! {
-                        self.#index.encode(writer)?;
+                        senax_encoder::Encoder::encode(&self.#index, writer)?;
                     }
                 });
                 quote! {
                     writer.put_u8(senax_encoder::TAG_STRUCT_UNNAMED);
                     let count: usize = #field_count;
-                    count.encode(writer)?;
+                    senax_encoder::Encoder::encode(&count, writer)?;
                     #(#field_encode)*
                 }
             }
@@ -455,7 +455,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                                 field_encode.push(quote! {
                                     if let Some(val) = #field_ident {
                                         senax_encoder::write_field_id_optimized(writer, #field_id)?;
-                                        val.encode(writer)?;
+                                        senax_encoder::Encoder::encode(&val, writer)?;
                                     }
                                 });
                             } else if field_attrs.skip_default {
@@ -463,13 +463,13 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                                 field_encode.push(quote! {
                                     if senax_encoder::Encoder::is_default(#field_ident) == false {
                                         senax_encoder::write_field_id_optimized(writer, #field_id)?;
-                                        #field_ident.encode(writer)?;
+                                        senax_encoder::Encoder::encode(&#field_ident, writer)?;
                                     }
                                 });
                             } else {
                                 field_encode.push(quote! {
                                     senax_encoder::write_field_id_optimized(writer, #field_id)?;
-                                    #field_ident.encode(writer)?;
+                                    senax_encoder::Encoder::encode(&#field_ident, writer)?;
                                 });
                             }
                         }
@@ -493,9 +493,9 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                                 writer.put_u8(senax_encoder::TAG_ENUM_UNNAMED);
                                 senax_encoder::write_field_id_optimized(writer, #variant_id)?;
                                 let count: usize = #field_count;
-                                count.encode(writer)?;
+                                senax_encoder::Encoder::encode(&count, writer)?;
                                 #(
-                                    #field_bindings_ref.encode(writer)?;
+                                    senax_encoder::Encoder::encode(&#field_bindings_ref, writer)?;
                                 )*
                             }
                         });
@@ -645,13 +645,13 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                                 });
                             Some(quote! {
                                 x if x == #id_val => {
-                                    field_values.#ident = Some(<#inner_ty>::decode(reader)?);
+                                    field_values.#ident = Some(<#inner_ty as senax_encoder::Decoder>::decode(reader)?);
                                 }
                             })
                         } else {
                             Some(quote! {
                                 x if x == #id_val => {
-                                    field_values.#ident = Some(<#original_ty>::decode(reader)?);
+                                    field_values.#ident = Some(<#original_ty as senax_encoder::Decoder>::decode(reader)?);
                                 }
                             })
                         }
@@ -721,7 +721,7 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                 let field_deencode = fields.unnamed.iter().map(|f| {
                     let field_ty = &f.ty;
                     quote! {
-                        <#field_ty>::decode(reader)?
+                        <#field_ty as senax_encoder::Decoder>::decode(reader)?
                     }
                 });
                 quote! {
@@ -732,7 +732,7 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                     if tag != senax_encoder::TAG_STRUCT_UNNAMED {
                         return Err(senax_encoder::EncoderError::Decode(format!("Expected struct unnamed tag ({}), got {}", senax_encoder::TAG_STRUCT_UNNAMED, tag)));
                     }
-                    let count = <usize>::decode(reader)?;
+                    let count = <usize as senax_encoder::Decoder>::decode(reader)?;
                     if count != #field_count {
                         return Err(senax_encoder::EncoderError::Decode(format!("Field count mismatch for struct {}: expected {}, got {}", stringify!(#name), #field_count, count)));
                     }
@@ -814,12 +814,12 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                                 let inner_ty = extract_inner_type_from_option(ty).unwrap();
                                 let field_id = attrs.id;
                                 match_arms_enum_named.push(quote! {
-                                    x if x == #field_id => { field_values.#ident = Some(<#inner_ty>::decode(reader)?); }
+                                    x if x == #field_id => { field_values.#ident = Some(<#inner_ty as senax_encoder::Decoder>::decode(reader)?); }
                                 });
                             } else {
                                 let field_id = attrs.id;
                                 match_arms_enum_named.push(quote! {
-                                    x if x == #field_id => { field_values.#ident = Some(<#ty>::decode(reader)?); }
+                                    x if x == #field_id => { field_values.#ident = Some(<#ty as senax_encoder::Decoder>::decode(reader)?); }
                                 });
                             }
 
@@ -868,13 +868,13 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                         let field_count = field_types.len();
                         unnamed_variant_arms.push(quote! {
                             x if x == #variant_id => {
-                                let count = <usize>::decode(reader)?;
+                                let count = <usize as senax_encoder::Decoder>::decode(reader)?;
                                 if count != #field_count {
                                     return Err(senax_encoder::EncoderError::Decode(format!("Field count mismatch for variant {}::{}: expected {}, got {}", stringify!(#name), stringify!(#variant_ident), #field_count, count)));
                                 }
                                 Ok(#name::#variant_ident(
                                     #(
-                                        <#field_types>::decode(reader)?,
+                                        <#field_types as senax_encoder::Decoder>::decode(reader)?,
                                     )*
                                 ))
                             }
