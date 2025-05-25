@@ -2479,3 +2479,22 @@ impl Decoder for SmolStr {
         Ok(SmolStr::new(string))
     }
 }
+
+// --- Box<T> ---
+/// Encodes a `Box<T>` by encoding the inner value.
+impl<T: Encoder> Encoder for Box<T> {
+    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+        (**self).encode(writer)
+    }
+
+    fn is_default(&self) -> bool {
+        T::is_default(self)
+    }
+}
+
+/// Decodes a `Box<T>` by decoding the inner value and wrapping it in a Box.
+impl<T: Decoder> Decoder for Box<T> {
+    fn decode(reader: &mut Bytes) -> Result<Self> {
+        Ok(Box::new(T::decode(reader)?))
+    }
+}

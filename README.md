@@ -127,7 +127,7 @@ let value2 = MyStruct::decode(&mut bytes)?;
 
 ### Core Types (always available)
 - Primitives: `u8~u128`, `i8~i128`, `f32`, `f64`, `bool`, `String`, `Bytes`
-- Option, Vec, arrays, HashMap, BTreeMap, Set, Tuple, Enum, Struct
+- Option, Vec, arrays, HashMap, BTreeMap, Set, Tuple, Enum, Struct, Arc, Box
 
 ### Feature-gated Types
 When respective features are enabled:

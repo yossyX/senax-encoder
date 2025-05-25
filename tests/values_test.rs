@@ -2716,3 +2716,150 @@ fn test_combined_features() {
     let decoded = CombinedStruct::decode(&mut buf.freeze()).unwrap();
     assert_eq!(combined, decoded);
 }
+
+#[test]
+fn test_box_generic_encode_decode() {
+    // Box<String>
+    let values_string = vec![
+        Box::new(String::from("")),
+        Box::new(String::from("hello")),
+        Box::new(String::from("こんにちは世界")),
+        Box::new(String::from(
+            "a very long string with unicode 🚀 and symbols !@#$%^&*()",
+        )),
+    ];
+    for original in values_string {
+        let mut buf = BytesMut::new();
+        original.encode(&mut buf).unwrap();
+        let mut cur = buf.freeze();
+        let decoded = Box::<String>::decode(&mut cur).unwrap();
+        assert_eq!(&*original, &*decoded, "Box<String> roundtrip failed");
+    }
+
+    // Box<i32>
+    let values_i32 = vec![
+        Box::new(0i32),
+        Box::new(42i32),
+        Box::new(-123i32),
+        Box::new(i32::MAX),
+        Box::new(i32::MIN),
+    ];
+    for original in values_i32 {
+        let mut buf = BytesMut::new();
+        original.encode(&mut buf).unwrap();
+        let mut cur = buf.freeze();
+        let decoded = Box::<i32>::decode(&mut cur).unwrap();
+        assert_eq!(&*original, &*decoded, "Box<i32> roundtrip failed");
+    }
+
+    // Box<Vec<u8>>
+    let values_vec = vec![
+        Box::new(Vec::<u8>::new()),
+        Box::new(vec![1, 2, 3, 4, 5]),
+        Box::new(vec![0xFF, 0x00, 0xAB, 0xCD]),
+    ];
+    for original in values_vec {
+        let mut buf = BytesMut::new();
+        original.encode(&mut buf).unwrap();
+        let mut cur = buf.freeze();
+        let decoded = Box::<Vec<u8>>::decode(&mut cur).unwrap();
+        assert_eq!(&*original, &*decoded, "Box<Vec<u8>> roundtrip failed");
+    }
+
+    // Box<Option<String>>
+    let values_option = vec![
+        Box::new(None::<String>),
+        Box::new(Some("test".to_string())),
+        Box::new(Some("".to_string())),
+    ];
+    for original in values_option {
+        let mut buf = BytesMut::new();
+        original.encode(&mut buf).unwrap();
+        let mut cur = buf.freeze();
+        let decoded = Box::<Option<String>>::decode(&mut cur).unwrap();
+        assert_eq!(
+            &*original, &*decoded,
+            "Box<Option<String>> roundtrip failed"
+        );
+    }
+}
+
+#[derive(Encode, Decode, Debug, PartialEq)]
+struct BoxGenericStruct {
+    name: Box<String>,
+    id: Box<i32>,
+    data: Box<Vec<u8>>,
+    nickname: Option<Box<String>>,
+}
+
+#[test]
+fn test_struct_with_box_generic_fields() {
+    let cases = vec![
+        BoxGenericStruct {
+            name: Box::new("Alice".to_string()),
+            id: Box::new(42),
+            data: Box::new(vec![1, 2, 3]),
+            nickname: Some(Box::new("Ally".to_string())),
+        },
+        BoxGenericStruct {
+            name: Box::new("Bob".to_string()),
+            id: Box::new(0),
+            data: Box::new(Vec::new()),
+            nickname: None,
+        },
+        BoxGenericStruct {
+            name: Box::new("".to_string()),
+            id: Box::new(-999),
+            data: Box::new(vec![0xFF]),
+            nickname: Some(Box::new("".to_string())),
+        },
+        BoxGenericStruct {
+            name: Box::new("こんにちは".to_string()),
+            id: Box::new(i32::MAX),
+            data: Box::new(vec![0x00, 0x01, 0x02]),
+            nickname: Some(Box::new("世界".to_string())),
+        },
+    ];
+    for original in cases {
+        let mut buf = BytesMut::new();
+        original.encode(&mut buf).unwrap();
+        let mut cur = buf.freeze();
+        let decoded = BoxGenericStruct::decode(&mut cur).unwrap();
+        assert_eq!(original, decoded, "BoxGenericStruct roundtrip failed");
+    }
+}
+
+#[test]
+#[allow(unused_allocation)]
+fn test_box_is_default_behavior() {
+    assert!(Box::new(String::new()).is_default());
+    assert!(Box::new("".to_string()).is_default());
+    assert!(!Box::new("hello".to_string()).is_default());
+    assert!(Box::new(0i32).is_default());
+    assert!(!Box::new(1i32).is_default());
+    assert!(Box::new(Vec::<u8>::new()).is_default());
+    assert!(Box::new(None::<String>).is_default());
+}
+
+#[test]
+fn test_box_vs_arc_compatibility() {
+    // Test that Box<T> and Arc<T> encode the same way (since they both encode the inner value)
+    let box_value = Box::new("test".to_string());
+    let arc_value = Arc::new("test".to_string());
+
+    let mut box_buf = BytesMut::new();
+    box_value.encode(&mut box_buf).unwrap();
+
+    let mut arc_buf = BytesMut::new();
+    arc_value.encode(&mut arc_buf).unwrap();
+
+    // The encoded bytes should be identical
+    assert_eq!(box_buf.as_ref(), arc_buf.as_ref());
+
+    // Cross-decoding should work
+    let box_from_arc = Box::<String>::decode(&mut arc_buf.freeze()).unwrap();
+    let arc_from_box = Arc::<String>::decode(&mut box_buf.freeze()).unwrap();
+
+    assert_eq!(&*box_value, &*box_from_arc);
+    assert_eq!(&*arc_value, &*arc_from_box);
+}
