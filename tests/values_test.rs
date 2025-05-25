@@ -555,27 +555,22 @@ fn test_signed_integer_compact_encoding() {
 
 #[test]
 fn test_float_cross_decode() {
-    // f32→f64
+    // f32→f64 cross-decoding is not supported
     let v32: f32 = 3.1415927;
     let mut buf = BytesMut::new();
     v32.encode(&mut buf).unwrap();
     let mut cur = buf.freeze();
-    let got64 = f64::decode(&mut cur).unwrap();
-    assert!(
-        (got64 - v32 as f64).abs() < 1e-7,
-        "f32→f64 cross failed: {} vs {}",
-        got64,
-        v32
-    );
+    let result64 = f64::decode(&mut cur);
+    assert!(result64.is_err(), "f32→f64 cross-decoding should fail");
 
-    // f64→f32
+    // f64→f32 (with precision loss)
     let v64: f64 = 2.718281828459045;
     let mut buf = BytesMut::new();
     v64.encode(&mut buf).unwrap();
     let mut cur = buf.freeze();
     let got32 = f32::decode(&mut cur).unwrap();
     assert!(
-        (got32 as f64 - v64).abs() < 1e-6,
+        (got32.to_string().parse::<f64>().unwrap() - v64).abs() < 1e-6,
         "f64→f32 cross failed: {} vs {}",
         got32,
         v64
@@ -2073,4 +2068,298 @@ fn test_skip_default_attribute() {
     // Buffer with default values should be smaller than buffer with non-default values
     // (since default fields are skipped)
     assert!(buffer1_len < buffer2_len);
+}
+
+#[test]
+fn test_tuple_as_values() {
+    // Test tuples as struct fields
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct TupleContainer {
+        coordinates: (f64, f64),
+        rgb_color: (u8, u8, u8),
+        name_and_score: (String, i32),
+        optional_pair: Option<(i32, String)>,
+        nested_tuple: ((i32, i32), (String, bool)),
+    }
+
+    let container = TupleContainer {
+        coordinates: (35.6762, 139.6503), // Tokyo coordinates
+        rgb_color: (255, 128, 64),
+        name_and_score: ("Alice".to_string(), 95),
+        optional_pair: Some((42, "test".to_string())),
+        nested_tuple: ((10, 20), ("nested".to_string(), true)),
+    };
+
+    let mut buffer = BytesMut::new();
+    container.encode(&mut buffer).unwrap();
+
+    let mut reader = buffer.freeze();
+    let decoded = TupleContainer::decode(&mut reader).unwrap();
+
+    assert_eq!(container, decoded);
+
+    // Test with None optional tuple
+    let container_with_none = TupleContainer {
+        coordinates: (0.0, 0.0),
+        rgb_color: (0, 0, 0),
+        name_and_score: ("".to_string(), 0),
+        optional_pair: None,
+        nested_tuple: ((0, 0), ("".to_string(), false)),
+    };
+
+    let mut buffer2 = BytesMut::new();
+    container_with_none.encode(&mut buffer2).unwrap();
+
+    let mut reader2 = buffer2.freeze();
+    let decoded2 = TupleContainer::decode(&mut reader2).unwrap();
+
+    assert_eq!(container_with_none, decoded2);
+}
+
+#[test]
+fn test_tuple_in_collections() {
+    // Test tuples in Vec
+    let tuple_vec = vec![
+        (1, "first".to_string()),
+        (2, "second".to_string()),
+        (3, "third".to_string()),
+    ];
+
+    let mut buffer = BytesMut::new();
+    tuple_vec.encode(&mut buffer).unwrap();
+
+    let mut reader = buffer.freeze();
+    let decoded: Vec<(i32, String)> = Vec::decode(&mut reader).unwrap();
+
+    assert_eq!(tuple_vec, decoded);
+
+    // Test tuples in HashMap
+    let mut tuple_map = HashMap::new();
+    tuple_map.insert("point1".to_string(), (10, 20));
+    tuple_map.insert("point2".to_string(), (30, 40));
+
+    let mut buffer2 = BytesMut::new();
+    tuple_map.encode(&mut buffer2).unwrap();
+
+    let mut reader2 = buffer2.freeze();
+    let decoded_map: HashMap<String, (i32, i32)> = HashMap::decode(&mut reader2).unwrap();
+
+    assert_eq!(tuple_map, decoded_map);
+}
+
+#[test]
+fn test_various_tuple_sizes() {
+    // Test tuples of different sizes individually
+
+    // Test 1-tuple
+    let tuple_1 = (42,);
+    let mut buffer = BytesMut::new();
+    tuple_1.encode(&mut buffer).unwrap();
+    let mut reader = buffer.freeze();
+    let decoded_1 = <(i32,)>::decode(&mut reader).unwrap();
+    assert_eq!(tuple_1, decoded_1);
+
+    // Test 2-tuple
+    let tuple_2 = (1, 2);
+    let mut buffer = BytesMut::new();
+    tuple_2.encode(&mut buffer).unwrap();
+    let mut reader = buffer.freeze();
+    let decoded_2 = <(i32, i32)>::decode(&mut reader).unwrap();
+    assert_eq!(tuple_2, decoded_2);
+
+    // Test 3-tuple
+    let tuple_3 = (1, "two".to_string(), 3.0);
+    let mut buffer = BytesMut::new();
+    tuple_3.encode(&mut buffer).unwrap();
+    let mut reader = buffer.freeze();
+    let decoded_3 = <(i32, String, f64)>::decode(&mut reader).unwrap();
+    assert_eq!(tuple_3, decoded_3);
+
+    // Test 4-tuple
+    let tuple_4 = (1, 2, 3, 4);
+    let mut buffer = BytesMut::new();
+    tuple_4.encode(&mut buffer).unwrap();
+    let mut reader = buffer.freeze();
+    let decoded_4 = <(i32, i32, i32, i32)>::decode(&mut reader).unwrap();
+    assert_eq!(tuple_4, decoded_4);
+
+    // Test 5-tuple
+    let tuple_5 = (1, 2, 3, 4, 5);
+    let mut buffer = BytesMut::new();
+    tuple_5.encode(&mut buffer).unwrap();
+    let mut reader = buffer.freeze();
+    let decoded_5 = <(i32, i32, i32, i32, i32)>::decode(&mut reader).unwrap();
+    assert_eq!(tuple_5, decoded_5);
+
+    // Test 10-tuple
+    let tuple_10 = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+    let mut buffer = BytesMut::new();
+    tuple_10.encode(&mut buffer).unwrap();
+    let mut reader = buffer.freeze();
+    let decoded_10 =
+        <(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>::decode(&mut reader).unwrap();
+    assert_eq!(tuple_10, decoded_10);
+
+    // Test 12-tuple (newly supported)
+    let tuple_12 = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+    let mut buffer = BytesMut::new();
+    tuple_12.encode(&mut buffer).unwrap();
+    let mut reader = buffer.freeze();
+    let decoded_12 =
+        <(i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32)>::decode(&mut reader)
+            .unwrap();
+    assert_eq!(tuple_12, decoded_12);
+}
+
+#[test]
+fn test_unnamed_structs() {
+    // Test basic tuple struct
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct Point2D(f64, f64);
+
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct Color(u8, u8, u8, u8); // RGBA
+
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct UserId(u64);
+
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct Wrapper(String, i32, bool);
+
+    let point = Point2D(10.5, 20.3);
+    let color = Color(255, 128, 64, 200);
+    let user_id = UserId(123456789);
+    let wrapper = Wrapper("test".to_string(), 42, true);
+
+    // Test Point2D
+    let mut buffer = BytesMut::new();
+    point.encode(&mut buffer).unwrap();
+    let mut reader = buffer.freeze();
+    let decoded_point = Point2D::decode(&mut reader).unwrap();
+    assert_eq!(point, decoded_point);
+
+    // Test Color
+    let mut buffer = BytesMut::new();
+    color.encode(&mut buffer).unwrap();
+    let mut reader = buffer.freeze();
+    let decoded_color = Color::decode(&mut reader).unwrap();
+    assert_eq!(color, decoded_color);
+
+    // Test UserId
+    let mut buffer = BytesMut::new();
+    user_id.encode(&mut buffer).unwrap();
+    let mut reader = buffer.freeze();
+    let decoded_user_id = UserId::decode(&mut reader).unwrap();
+    assert_eq!(user_id, decoded_user_id);
+
+    // Test Wrapper
+    let mut buffer = BytesMut::new();
+    wrapper.encode(&mut buffer).unwrap();
+    let mut reader = buffer.freeze();
+    let decoded_wrapper = Wrapper::decode(&mut reader).unwrap();
+    assert_eq!(wrapper, decoded_wrapper);
+}
+
+#[test]
+fn test_unnamed_struct_with_complex_types() {
+    // Test tuple struct with complex types
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct ComplexTuple(Option<String>, Vec<i32>, HashMap<String, u32>, (f64, f64));
+
+    let mut map = HashMap::new();
+    map.insert("key1".to_string(), 100);
+    map.insert("key2".to_string(), 200);
+
+    let complex = ComplexTuple(
+        Some("hello".to_string()),
+        vec![1, 2, 3, 4, 5],
+        map,
+        (3.14, 2.71),
+    );
+
+    let mut buffer = BytesMut::new();
+    complex.encode(&mut buffer).unwrap();
+
+    let mut reader = buffer.freeze();
+    let decoded = ComplexTuple::decode(&mut reader).unwrap();
+
+    assert_eq!(complex, decoded);
+
+    // Test with None option
+    let complex_none = ComplexTuple(None, vec![], HashMap::new(), (0.0, 0.0));
+
+    let mut buffer2 = BytesMut::new();
+    complex_none.encode(&mut buffer2).unwrap();
+
+    let mut reader2 = buffer2.freeze();
+    let decoded2 = ComplexTuple::decode(&mut reader2).unwrap();
+
+    assert_eq!(complex_none, decoded2);
+}
+
+#[test]
+fn test_unnamed_struct_in_collections() {
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct Point(i32, i32);
+
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct Distance(f64);
+
+    // Test Vec of tuple structs
+    let points = vec![Point(0, 0), Point(10, 20), Point(-5, 15)];
+
+    let mut buffer = BytesMut::new();
+    points.encode(&mut buffer).unwrap();
+
+    let mut reader = buffer.freeze();
+    let decoded_points: Vec<Point> = Vec::decode(&mut reader).unwrap();
+
+    assert_eq!(points, decoded_points);
+
+    // Test HashMap with tuple struct as value
+    let mut distance_map = HashMap::new();
+    distance_map.insert("short".to_string(), Distance(1.5));
+    distance_map.insert("medium".to_string(), Distance(10.0));
+    distance_map.insert("long".to_string(), Distance(100.5));
+
+    let mut buffer2 = BytesMut::new();
+    distance_map.encode(&mut buffer2).unwrap();
+
+    let mut reader2 = buffer2.freeze();
+    let decoded_map: HashMap<String, Distance> = HashMap::decode(&mut reader2).unwrap();
+
+    assert_eq!(distance_map, decoded_map);
+}
+
+#[test]
+fn test_nested_unnamed_structs() {
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct Inner(i32, String);
+
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct Outer(Inner, bool, Option<Inner>);
+
+    let inner1 = Inner(42, "first".to_string());
+    let inner2 = Inner(99, "second".to_string());
+    let outer = Outer(inner1, true, Some(inner2));
+
+    let mut buffer = BytesMut::new();
+    outer.encode(&mut buffer).unwrap();
+
+    let mut reader = buffer.freeze();
+    let decoded = Outer::decode(&mut reader).unwrap();
+
+    assert_eq!(outer, decoded);
+
+    // Test with None inner
+    let inner_only = Inner(123, "only".to_string());
+    let outer_none = Outer(inner_only, false, None);
+
+    let mut buffer2 = BytesMut::new();
+    outer_none.encode(&mut buffer2).unwrap();
+
+    let mut reader2 = buffer2.freeze();
+    let decoded2 = Outer::decode(&mut reader2).unwrap();
+
+    assert_eq!(outer_none, decoded2);
 }

@@ -841,7 +841,7 @@ impl Encoder for f32 {
         *self == 0.0
     }
 }
-/// Decodes an `f32` from either 4 or 8 bytes (accepts f64 for compatibility).
+/// Decodes an `f32` from either 4 or 8 bytes (accepts f64 for compatibility with precision loss).
 impl Decoder for f32 {
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
@@ -882,7 +882,7 @@ impl Encoder for f64 {
         *self == 0.0
     }
 }
-/// Decodes an `f64` from either 8 or 4 bytes (accepts f32 for compatibility).
+/// Decodes an `f64` from 8 bytes (f32 cross-decoding not supported).
 impl Decoder for f64 {
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
@@ -896,17 +896,10 @@ impl Decoder for f64 {
             let mut bytes = [0u8; 8];
             reader.copy_to_slice(&mut bytes);
             Ok(f64::from_le_bytes(bytes))
-        } else if tag == TAG_F32 {
-            if reader.remaining() < 4 {
-                return Err(EncoderError::InsufficientData);
-            }
-            let mut bytes = [0u8; 4];
-            reader.copy_to_slice(&mut bytes);
-            Ok(f32::from_le_bytes(bytes) as f64)
         } else {
             Err(EncoderError::Decode(format!(
-                "Expected f64/f32 tag ({} or {}), got {}",
-                TAG_F64, TAG_F32, tag
+                "Expected f64 tag ({}), got {}. f32 to f64 cross-decoding is not supported due to precision concerns.",
+                TAG_F64, tag
             )))
         }
     }
@@ -1216,7 +1209,7 @@ macro_rules! count_args {
     ($head:ident $(, $tail:ident)*) => { 1 + count_args!($($tail),*) };
 }
 
-// Generate tuple implementations for 0 to 10 elements
+// Generate tuple implementations for 0 to 12 elements
 impl_tuple!();
 impl_tuple!(T0: 0);
 impl_tuple!(T0: 0, T1: 1);
@@ -1228,6 +1221,8 @@ impl_tuple!(T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6);
 impl_tuple!(T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7);
 impl_tuple!(T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7, T8: 8);
 impl_tuple!(T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7, T8: 8, T9: 9);
+impl_tuple!(T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7, T8: 8, T9: 9, T10: 10);
+impl_tuple!(T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7, T8: 8, T9: 9, T10: 10, T11: 11);
 
 // --- Map (HashMap) ---
 /// Encodes a map as a length-prefixed sequence of key-value pairs.

@@ -208,8 +208,8 @@ f32 -> [TAG_F32] [value:f32_le]
 f64 -> [TAG_F64] [value:f64_le]
 ```
 **Cross-Type Decoding:**
-- f32 can be decoded as f64 (with conversion)
 - f64 can be decoded as f32 (with potential precision loss)
+- f32 to f64 cross-decoding is not supported due to precision ambiguity
 
 ### 4.5 Strings
 

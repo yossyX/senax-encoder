@@ -129,3 +129,152 @@ When respective features are enabled:
 
 - **chrono**: `DateTime<Utc>`, `DateTime<Local>`, `NaiveDate`, `NaiveTime`
 - **uuid**: `Uuid`
+
+## Type Compatibility and Cross-Decoding
+
+The senax-encoder supports automatic type conversion for compatible types during decoding, enabling schema evolution. However, certain conversions are not supported due to precision or data loss concerns.
+
+### ✅ Supported Cross-Type Decoding
+
+- **Integer types**: Any unsigned integer can be decoded as a larger unsigned integer (e.g., `u16` → `u32`)
+- **Signed integers**: Can be decoded as larger signed integers if the value fits within the target range
+- **Unsigned to signed**: Supported if the value fits within the signed type's positive range
+- **Floating point**: `f64` can be decoded as `f32` (with potential precision loss)
+- **Container expansion**: `T` can be decoded as `Option<T>`
+
+### ❌ Unsupported Cross-Type Decoding
+
+- **f32 to f64**: Not supported due to precision ambiguity. Use consistent float types or handle conversion manually.
+- **Signed to unsigned**: Negative values cannot be decoded as unsigned types
+- **Integer overflow**: Values too large for the target type will cause decode errors
+- **Container shrinking**: `Option<T>` cannot be automatically decoded as `T` (use explicit handling)
+
+### ⚠️ Important Notes
+
+- **Type changes are automatically applied when compatible**, but incompatible conversions will result in decode errors.
+- **Always test schema evolution scenarios** with actual data before deploying changes.
+- **For critical applications**, prefer explicit type versioning over relying on automatic conversion.
+- **Float precision**: When working with floating-point numbers, use the same precision consistently to avoid conversion issues.
+
+Example of compatible schema evolution:
+```rust
+// Version 1
+#[derive(Encode, Decode)]
+struct User {
+    id: u32,        // Will be compatible with u64 in v2
+    name: String,
+}
+
+// Version 2 - Compatible changes
+#[derive(Encode, Decode)]  
+struct User {
+    id: u64,                    // ✅ u32 → u64 automatic conversion
+    name: String,
+    email: Option<String>,      // ✅ New optional field
+    #[senax(default)]
+    age: u32,                   // ✅ New field with default
+}
+```
+
+## Custom Encoder/Decoder Implementation
+
+When implementing custom `Encoder` and `Decoder` traits for your types, follow these important guidelines to ensure proper binary format consistency:
+
+### ✅ Best Practices
+
+- **Single encode call**: Each value should be encoded with exactly one `encode()` call that writes all necessary data atomically.
+- **Use tuples for multiple values**: If you need to encode multiple related values, group them into a tuple rather than making separate encode calls.
+- **Error handling**: Always check for insufficient data in your decoder and return appropriate errors.
+
+### ❌ Common Mistakes to Avoid
+
+```rust
+// ❌ WRONG: Multiple separate encode calls
+impl Encoder for MyType {
+    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+        self.field1.encode(writer)?;  // First encode call
+        self.field2.encode(writer)?;  // Second encode call - WRONG!
+        Ok(())
+    }
+}
+
+// ✅ CORRECT: Single encode call with tuple
+impl Encoder for MyType {
+    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+        (self.field1, self.field2).encode(writer)  // Single encode call
+    }
+}
+```
+
+### Manual Implementation Example
+
+```rust
+use senax_encoder::{Encoder, Decoder, EncoderError};
+use bytes::{BytesMut, Bytes};
+
+struct Point3D {
+    x: f64,
+    y: f64, 
+    z: f64,
+}
+
+impl Encoder for Point3D {
+    fn encode(&self, writer: &mut BytesMut) -> senax_encoder::Result<()> {
+        // ✅ Encode as single tuple
+        (self.x, self.y, self.z).encode(writer)
+    }
+
+    fn is_default(&self) -> bool {
+        self.x == 0.0 && self.y == 0.0 && self.z == 0.0
+    }
+}
+
+impl Decoder for Point3D {
+    fn decode(reader: &mut Bytes) -> senax_encoder::Result<Self> {
+        // ✅ Decode the same tuple structure
+        let (x, y, z) = <(f64, f64, f64)>::decode(reader)?;
+        Ok(Point3D { x, y, z })
+    }
+}
+```
+
+### Advanced Example with Complex Data
+
+```rust
+struct CustomFormat {
+    header: String,
+    data: Vec<u8>,
+    checksum: u32,
+}
+
+impl Encoder for CustomFormat {
+    fn encode(&self, writer: &mut BytesMut) -> senax_encoder::Result<()> {
+        // ✅ Group all fields into a single tuple
+        (
+            &self.header,
+            &self.data, 
+            self.checksum
+        ).encode(writer)
+    }
+
+    fn is_default(&self) -> bool {
+        self.header.is_empty() && self.data.is_empty() && self.checksum == 0
+    }
+}
+
+impl Decoder for CustomFormat {
+    fn decode(reader: &mut Bytes) -> senax_encoder::Result<Self> {
+        // ✅ Decode the same tuple structure
+        let (header, data, checksum) = <(String, Vec<u8>, u32)>::decode(reader)?;
+        Ok(CustomFormat { header, data, checksum })
+    }
+}
+```
+
+### Why This Matters
+
+- **Format consistency**: Each value gets exactly one tag in the binary format
+- **Schema evolution**: The library can properly skip unknown fields during forward/backward compatibility
+
+
+**Note**: For most use cases, prefer using `#[derive(Encode, Decode)]` which automatically follows these best practices.
