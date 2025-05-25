@@ -1013,28 +1013,13 @@ impl<T: Decoder> Decoder for Option<T> {
 impl<T: Encoder + 'static> Encoder for Vec<T> {
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         if std::any::TypeId::of::<T>() == std::any::TypeId::of::<u8>() {
-            writer.put_u8(TAG_BINARY);
-            let len = self.len();
-            len.encode(writer)?;
-            let bytes =
-                unsafe { std::slice::from_raw_parts(self.as_ptr() as *const u8, self.len()) };
-            writer.put_slice(bytes);
-            Ok(())
+            // Safety: We've verified T is u8, so this cast is safe
+            let vec_u8 = unsafe { &*(self as *const Vec<T> as *const Vec<u8>) };
+            encode_vec_u8(vec_u8, writer)
         } else {
-            let len = self.len();
-            let max_short = (TAG_ARRAY_VEC_SET_LONG - TAG_ARRAY_VEC_SET_BASE - 1) as usize;
-            if len <= max_short {
-                let tag = TAG_ARRAY_VEC_SET_BASE + len as u8;
-                writer.put_u8(tag);
-                for item in self {
-                    item.encode(writer)?;
-                }
-            } else {
-                writer.put_u8(TAG_ARRAY_VEC_SET_LONG);
-                len.encode(writer)?;
-                for item in self {
-                    item.encode(writer)?;
-                }
+            encode_vec_length(self.len(), writer)?;
+            for item in self {
+                item.encode(writer)?;
             }
             Ok(())
         }
@@ -1051,34 +1036,29 @@ impl<T: Decoder + 'static> Decoder for Vec<T> {
             return Err(EncoderError::InsufficientData);
         }
         let tag = reader.get_u8();
-        if tag == TAG_BINARY && std::any::TypeId::of::<T>() == std::any::TypeId::of::<u8>() {
-            let len = usize::decode(reader)?;
-            let mut vec = vec![0u8; len];
-            reader.copy_to_slice(&mut vec);
-            let ptr = vec.as_mut_ptr() as *mut T;
-            let len = vec.len();
-            let cap = vec.capacity();
-            std::mem::forget(vec);
-            unsafe { Ok(Vec::from_raw_parts(ptr, len, cap)) }
-        } else if (TAG_ARRAY_VEC_SET_BASE..TAG_ARRAY_VEC_SET_LONG).contains(&tag) {
-            let len = (tag - TAG_ARRAY_VEC_SET_BASE) as usize;
-            let mut vec = Vec::with_capacity(len);
-            for _ in 0..len {
-                vec.push(T::decode(reader)?);
+
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<u8>() {
+            if tag == TAG_BINARY {
+                let vec_u8 = decode_vec_u8(reader)?;
+                // Safety: We've verified T is u8, so this cast is safe
+                let ptr = vec_u8.as_ptr() as *mut T;
+                let len = vec_u8.len();
+                let cap = vec_u8.capacity();
+                std::mem::forget(vec_u8);
+                unsafe { Ok(Vec::from_raw_parts(ptr, len, cap)) }
+            } else {
+                Err(EncoderError::Decode(format!(
+                    "Expected Vec<u8> tag ({}), got {}",
+                    TAG_BINARY, tag
+                )))
             }
-            Ok(vec)
-        } else if tag == TAG_ARRAY_VEC_SET_LONG {
-            let len = usize::decode(reader)?;
-            let mut vec = Vec::with_capacity(len);
-            for _ in 0..len {
-                vec.push(T::decode(reader)?);
-            }
-            Ok(vec)
         } else {
-            Err(EncoderError::Decode(format!(
-                "Expected Vec tag ({}..={} or {}), got {}",
-                TAG_ARRAY_VEC_SET_BASE, TAG_ARRAY_VEC_SET_LONG, TAG_BINARY, tag
-            )))
+            let len = decode_vec_length(tag, reader)?;
+            let mut vec = Vec::with_capacity(len);
+            for _ in 0..len {
+                vec.push(T::decode(reader)?);
+            }
+            Ok(vec)
         }
     }
 }
@@ -1087,19 +1067,9 @@ impl<T: Decoder + 'static> Decoder for Vec<T> {
 /// Encodes a fixed-size array as a length-prefixed sequence.
 impl<T: Encoder, const N: usize> Encoder for [T; N] {
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
-        let max_short = (TAG_ARRAY_VEC_SET_LONG - TAG_ARRAY_VEC_SET_BASE - 1) as usize;
-        if N <= max_short {
-            let tag = TAG_ARRAY_VEC_SET_BASE + N as u8;
-            writer.put_u8(tag);
-            for item in self {
-                item.encode(writer)?;
-            }
-        } else {
-            writer.put_u8(TAG_ARRAY_VEC_SET_LONG);
-            N.encode(writer)?;
-            for item in self {
-                item.encode(writer)?;
-            }
+        encode_vec_length(N, writer)?;
+        for item in self {
+            item.encode(writer)?;
         }
         Ok(())
     }
@@ -1115,16 +1085,7 @@ impl<T: Decoder, const N: usize> Decoder for [T; N] {
             return Err(EncoderError::InsufficientData);
         }
         let tag = reader.get_u8();
-        let len = if (TAG_ARRAY_VEC_SET_BASE..TAG_ARRAY_VEC_SET_LONG).contains(&tag) {
-            (tag - TAG_ARRAY_VEC_SET_BASE) as usize
-        } else if tag == TAG_ARRAY_VEC_SET_LONG {
-            usize::decode(reader)?
-        } else {
-            return Err(EncoderError::Decode(format!(
-                "Expected Array tag ({}..={}), got {}",
-                TAG_ARRAY_VEC_SET_BASE, TAG_ARRAY_VEC_SET_LONG, tag
-            )));
-        };
+        let len = decode_vec_length(tag, reader)?;
         if len != N {
             return Err(EncoderError::Decode(format!(
                 "Array length mismatch: expected {}, got {}",
@@ -1569,20 +1530,9 @@ pub fn skip_value(reader: &mut Bytes) -> Result<()> {
 /// Encodes a set as a length-prefixed sequence of elements.
 impl<T: Encoder + Eq + std::hash::Hash> Encoder for HashSet<T> {
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
-        let len = self.len();
-        let max_short = (TAG_ARRAY_VEC_SET_LONG - TAG_ARRAY_VEC_SET_BASE - 1) as usize;
-        if len <= max_short {
-            let tag = TAG_ARRAY_VEC_SET_BASE + len as u8;
-            writer.put_u8(tag);
-            for v in self {
-                v.encode(writer)?;
-            }
-        } else {
-            writer.put_u8(TAG_ARRAY_VEC_SET_LONG);
-            len.encode(writer)?;
-            for v in self {
-                v.encode(writer)?;
-            }
+        encode_vec_length(self.len(), writer)?;
+        for v in self {
+            v.encode(writer)?;
         }
         Ok(())
     }
@@ -1601,20 +1551,9 @@ impl<T: Decoder + Eq + std::hash::Hash + 'static> Decoder for HashSet<T> {
 // --- BTreeSet ---
 impl<T: Encoder + Ord> Encoder for BTreeSet<T> {
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
-        let len = self.len();
-        let max_short = (TAG_ARRAY_VEC_SET_LONG - TAG_ARRAY_VEC_SET_BASE - 1) as usize;
-        if len <= max_short {
-            let tag = TAG_ARRAY_VEC_SET_BASE + len as u8;
-            writer.put_u8(tag);
-            for v in self {
-                v.encode(writer)?;
-            }
-        } else {
-            writer.put_u8(TAG_ARRAY_VEC_SET_LONG);
-            len.encode(writer)?;
-            for v in self {
-                v.encode(writer)?;
-            }
+        encode_vec_length(self.len(), writer)?;
+        for v in self {
+            v.encode(writer)?;
         }
         Ok(())
     }
@@ -1633,20 +1572,9 @@ impl<T: Decoder + Ord + 'static> Decoder for BTreeSet<T> {
 #[cfg(feature = "indexmap")]
 impl<T: Encoder + Eq + std::hash::Hash> Encoder for IndexSet<T> {
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
-        let len = self.len();
-        let max_short = (TAG_ARRAY_VEC_SET_LONG - TAG_ARRAY_VEC_SET_BASE - 1) as usize;
-        if len <= max_short {
-            let tag = TAG_ARRAY_VEC_SET_BASE + len as u8;
-            writer.put_u8(tag);
-            for v in self {
-                v.encode(writer)?;
-            }
-        } else {
-            writer.put_u8(TAG_ARRAY_VEC_SET_LONG);
-            len.encode(writer)?;
-            for v in self {
-                v.encode(writer)?;
-            }
+        encode_vec_length(self.len(), writer)?;
+        for v in self {
+            v.encode(writer)?;
         }
         Ok(())
     }
@@ -2365,20 +2293,9 @@ impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for AHashMap<K, V> {
 #[cfg(feature = "fxhash")]
 impl<T: Encoder + Eq + std::hash::Hash> Encoder for FxHashSet<T> {
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
-        let len = self.len();
-        let max_short = (TAG_ARRAY_VEC_SET_LONG - TAG_ARRAY_VEC_SET_BASE - 1) as usize;
-        if len <= max_short {
-            let tag = TAG_ARRAY_VEC_SET_BASE + len as u8;
-            writer.put_u8(tag);
-            for v in self {
-                v.encode(writer)?;
-            }
-        } else {
-            writer.put_u8(TAG_ARRAY_VEC_SET_LONG);
-            len.encode(writer)?;
-            for v in self {
-                v.encode(writer)?;
-            }
+        encode_vec_length(self.len(), writer)?;
+        for v in self {
+            v.encode(writer)?;
         }
         Ok(())
     }
@@ -2399,20 +2316,9 @@ impl<T: Decoder + Eq + std::hash::Hash + 'static> Decoder for FxHashSet<T> {
 #[cfg(feature = "ahash")]
 impl<T: Encoder + Eq + std::hash::Hash> Encoder for AHashSet<T> {
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
-        let len = self.len();
-        let max_short = (TAG_ARRAY_VEC_SET_LONG - TAG_ARRAY_VEC_SET_BASE - 1) as usize;
-        if len <= max_short {
-            let tag = TAG_ARRAY_VEC_SET_BASE + len as u8;
-            writer.put_u8(tag);
-            for v in self {
-                v.encode(writer)?;
-            }
-        } else {
-            writer.put_u8(TAG_ARRAY_VEC_SET_LONG);
-            len.encode(writer)?;
-            for v in self {
-                v.encode(writer)?;
-            }
+        encode_vec_length(self.len(), writer)?;
+        for v in self {
+            v.encode(writer)?;
         }
         Ok(())
     }
@@ -2496,5 +2402,54 @@ impl<T: Encoder> Encoder for Box<T> {
 impl<T: Decoder> Decoder for Box<T> {
     fn decode(reader: &mut Bytes) -> Result<Self> {
         Ok(Box::new(T::decode(reader)?))
+    }
+}
+
+/// Encodes a `Vec<u8>` using the optimized binary format.
+fn encode_vec_u8(vec: &[u8], writer: &mut BytesMut) -> Result<()> {
+    writer.put_u8(TAG_BINARY);
+    let len = vec.len();
+    len.encode(writer)?;
+    let bytes = unsafe { std::slice::from_raw_parts(vec.as_ptr(), vec.len()) };
+    writer.put_slice(bytes);
+    Ok(())
+}
+
+/// Decodes a `Vec<u8>` from the optimized binary format.
+fn decode_vec_u8(reader: &mut Bytes) -> Result<Vec<u8>> {
+    let len = usize::decode(reader)?;
+    let mut vec = vec![0u8; len];
+    if len > 0 {
+        reader.copy_to_slice(&mut vec);
+    }
+    Ok(vec)
+}
+
+/// Encodes the length for array/vec/set format.
+#[inline(never)]
+fn encode_vec_length(len: usize, writer: &mut BytesMut) -> Result<()> {
+    let max_short = (TAG_ARRAY_VEC_SET_LONG - TAG_ARRAY_VEC_SET_BASE - 1) as usize;
+    if len <= max_short {
+        let tag = TAG_ARRAY_VEC_SET_BASE + len as u8;
+        writer.put_u8(tag);
+    } else {
+        writer.put_u8(TAG_ARRAY_VEC_SET_LONG);
+        len.encode(writer)?;
+    }
+    Ok(())
+}
+
+/// Decodes the length for array/vec/set format.
+#[inline(never)]
+fn decode_vec_length(tag: u8, reader: &mut Bytes) -> Result<usize> {
+    if (TAG_ARRAY_VEC_SET_BASE..TAG_ARRAY_VEC_SET_LONG).contains(&tag) {
+        Ok((tag - TAG_ARRAY_VEC_SET_BASE) as usize)
+    } else if tag == TAG_ARRAY_VEC_SET_LONG {
+        usize::decode(reader)
+    } else {
+        Err(EncoderError::Decode(format!(
+            "Expected Vec tag ({}..={}), got {}",
+            TAG_ARRAY_VEC_SET_BASE, TAG_ARRAY_VEC_SET_LONG, tag
+        )))
     }
 }
