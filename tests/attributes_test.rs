@@ -713,15 +713,15 @@ fn test_struct_with_u8_id() {
     let bytes = buffer.freeze();
 
     // Check that field IDs are written using optimized encoding
-    assert_eq!(bytes[0], senax_encoder::TAG_STRUCT_NAMED);
+    assert_eq!(bytes[0], senax_encoder::core::TAG_STRUCT_NAMED);
     // bytes[1] should contain field ID 1 as u8
     assert_eq!(bytes[1], 1);
     // bytes[2] should contain TAG_ZERO (for value 42) followed by 42
-    assert_eq!(bytes[2], senax_encoder::TAG_ZERO + 42);
+    assert_eq!(bytes[2], senax_encoder::core::TAG_ZERO + 42);
     // bytes[3] should contain field ID 2 as u8
     assert_eq!(bytes[3], 2);
     // bytes[4] should be string tag for "abc"
-    assert_eq!(bytes[4], senax_encoder::TAG_STRING_BASE + 3);
+    assert_eq!(bytes[4], senax_encoder::core::TAG_STRING_BASE + 3);
     // bytes[5..8] should be "abc"
     assert_eq!(&bytes[5..8], b"abc");
     // bytes[8] should be terminator (0 as u8)
@@ -763,7 +763,7 @@ fn test_enum_with_u8_id() {
     let bytes = buffer.freeze();
 
     // Check that variant IDs are written using optimized encoding
-    assert_eq!(bytes[0], senax_encoder::TAG_ENUM_NAMED);
+    assert_eq!(bytes[0], senax_encoder::core::TAG_ENUM_NAMED);
     // bytes[1] should contain variant ID 1 as u8
     assert_eq!(bytes[1], 1);
 }

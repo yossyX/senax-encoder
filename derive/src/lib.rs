@@ -306,7 +306,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                     if is_option {
                         field_encode.push(quote! {
                             if let Some(val) = &self.#field_ident {
-                                senax_encoder::write_field_id_optimized(writer, #field_id)?;
+                                senax_encoder::core::write_field_id_optimized(writer, #field_id)?;
                                 senax_encoder::Encoder::encode(&val, writer)?;
                             }
                         });
@@ -314,21 +314,21 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                         // For skip_default fields, check if the value is default before encoding
                         field_encode.push(quote! {
                             if senax_encoder::Encoder::is_default(&self.#field_ident) == false {
-                                senax_encoder::write_field_id_optimized(writer, #field_id)?;
+                                senax_encoder::core::write_field_id_optimized(writer, #field_id)?;
                                 senax_encoder::Encoder::encode(&self.#field_ident, writer)?;
                             }
                         });
                     } else {
                         field_encode.push(quote! {
-                            senax_encoder::write_field_id_optimized(writer, #field_id)?;
+                            senax_encoder::core::write_field_id_optimized(writer, #field_id)?;
                             senax_encoder::Encoder::encode(&self.#field_ident, writer)?;
                         });
                     }
                 }
                 quote! {
-                    writer.put_u8(senax_encoder::TAG_STRUCT_NAMED);
+                    writer.put_u8(senax_encoder::core::TAG_STRUCT_NAMED);
                     #(#field_encode)*
-                    senax_encoder::write_field_id_optimized(writer, 0)?;
+                    senax_encoder::core::write_field_id_optimized(writer, 0)?;
                 }
             }
             Fields::Unnamed(fields) => {
@@ -340,14 +340,14 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                     }
                 });
                 quote! {
-                    writer.put_u8(senax_encoder::TAG_STRUCT_UNNAMED);
+                    writer.put_u8(senax_encoder::core::TAG_STRUCT_UNNAMED);
                     let count: usize = #field_count;
                     senax_encoder::Encoder::encode(&count, writer)?;
                     #(#field_encode)*
                 }
             }
             Fields::Unit => quote! {
-                writer.put_u8(senax_encoder::TAG_STRUCT_UNIT);
+                writer.put_u8(senax_encoder::core::TAG_STRUCT_UNIT);
             },
         },
         Data::Enum(e) => {
@@ -454,7 +454,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                             if is_option {
                                 field_encode.push(quote! {
                                     if let Some(val) = #field_ident {
-                                        senax_encoder::write_field_id_optimized(writer, #field_id)?;
+                                        senax_encoder::core::write_field_id_optimized(writer, #field_id)?;
                                         senax_encoder::Encoder::encode(&val, writer)?;
                                     }
                                 });
@@ -462,23 +462,23 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                                 // For skip_default fields, check if the value is default before encoding
                                 field_encode.push(quote! {
                                     if senax_encoder::Encoder::is_default(#field_ident) == false {
-                                        senax_encoder::write_field_id_optimized(writer, #field_id)?;
+                                        senax_encoder::core::write_field_id_optimized(writer, #field_id)?;
                                         senax_encoder::Encoder::encode(&#field_ident, writer)?;
                                     }
                                 });
                             } else {
                                 field_encode.push(quote! {
-                                    senax_encoder::write_field_id_optimized(writer, #field_id)?;
+                                    senax_encoder::core::write_field_id_optimized(writer, #field_id)?;
                                     senax_encoder::Encoder::encode(&#field_ident, writer)?;
                                 });
                             }
                         }
                         variant_encode.push(quote! {
                             #name::#variant_ident { #(#field_idents),* } => {
-                                writer.put_u8(senax_encoder::TAG_ENUM_NAMED);
-                                senax_encoder::write_field_id_optimized(writer, #variant_id)?;
+                                writer.put_u8(senax_encoder::core::TAG_ENUM_NAMED);
+                                senax_encoder::core::write_field_id_optimized(writer, #variant_id)?;
                                 #(#field_encode)*
-                                senax_encoder::write_field_id_optimized(writer, 0)?;
+                                senax_encoder::core::write_field_id_optimized(writer, 0)?;
                             }
                         });
                     }
@@ -490,8 +490,8 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                         let field_bindings_ref = &field_bindings;
                         variant_encode.push(quote! {
                             #name::#variant_ident( #(#field_bindings_ref),* ) => {
-                                writer.put_u8(senax_encoder::TAG_ENUM_UNNAMED);
-                                senax_encoder::write_field_id_optimized(writer, #variant_id)?;
+                                writer.put_u8(senax_encoder::core::TAG_ENUM_UNNAMED);
+                                senax_encoder::core::write_field_id_optimized(writer, #variant_id)?;
                                 let count: usize = #field_count;
                                 senax_encoder::Encoder::encode(&count, writer)?;
                                 #(
@@ -503,8 +503,8 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                     Fields::Unit => {
                         variant_encode.push(quote! {
                             #name::#variant_ident => {
-                                writer.put_u8(senax_encoder::TAG_ENUM);
-                                senax_encoder::write_field_id_optimized(writer, #variant_id)?;
+                                writer.put_u8(senax_encoder::core::TAG_ENUM);
+                                senax_encoder::core::write_field_id_optimized(writer, #variant_id)?;
                             }
                         });
                     }
@@ -689,8 +689,8 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                         return Err(senax_encoder::EncoderError::InsufficientData);
                     }
                     let tag = reader.get_u8();
-                    if tag != senax_encoder::TAG_STRUCT_NAMED {
-                        return Err(senax_encoder::EncoderError::Decode(format!("Expected struct named tag ({}), got {}", senax_encoder::TAG_STRUCT_NAMED, tag)));
+                    if tag != senax_encoder::core::TAG_STRUCT_NAMED {
+                        return Err(senax_encoder::EncoderError::Decode(format!("Expected struct named tag ({}), got {}", senax_encoder::core::TAG_STRUCT_NAMED, tag)));
                     }
 
                     #[derive(Default)]
@@ -701,13 +701,13 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                     let mut field_values = FieldValues::default();
 
                     loop {
-                        let field_id = senax_encoder::read_field_id_optimized(reader)?;
+                        let field_id = senax_encoder::core::read_field_id_optimized(reader)?;
                         if field_id == 0 {
                             break;
                         }
                         match field_id {
                             #( #match_arms )*
-                            _unknown_id => { senax_encoder::skip_value(reader)?; }
+                            _unknown_id => { senax_encoder::core::skip_value(reader)?; }
                         }
                     }
 
@@ -729,8 +729,8 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                         return Err(senax_encoder::EncoderError::InsufficientData);
                     }
                     let tag = reader.get_u8();
-                    if tag != senax_encoder::TAG_STRUCT_UNNAMED {
-                        return Err(senax_encoder::EncoderError::Decode(format!("Expected struct unnamed tag ({}), got {}", senax_encoder::TAG_STRUCT_UNNAMED, tag)));
+                    if tag != senax_encoder::core::TAG_STRUCT_UNNAMED {
+                        return Err(senax_encoder::EncoderError::Decode(format!("Expected struct unnamed tag ({}), got {}", senax_encoder::core::TAG_STRUCT_UNNAMED, tag)));
                     }
                     let count = <usize as senax_encoder::Decoder>::decode(reader)?;
                     if count != #field_count {
@@ -746,8 +746,8 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                     return Err(senax_encoder::EncoderError::InsufficientData);
                 }
                 let tag = reader.get_u8();
-                if tag != senax_encoder::TAG_STRUCT_UNIT {
-                    return Err(senax_encoder::EncoderError::Decode(format!("Expected struct unit tag ({}), got {}", senax_encoder::TAG_STRUCT_UNIT, tag)));
+                if tag != senax_encoder::core::TAG_STRUCT_UNIT {
+                    return Err(senax_encoder::EncoderError::Decode(format!("Expected struct unit tag ({}), got {}", senax_encoder::core::TAG_STRUCT_UNIT, tag)));
                 }
                 Ok(#name)
             },
@@ -850,13 +850,13 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                                 loop {
                                     let field_id = {
                                         if reader.remaining() == 0 { break; }
-                                        let id = senax_encoder::read_field_id_optimized(reader)?;
+                                        let id = senax_encoder::core::read_field_id_optimized(reader)?;
                                         if id == 0 { break; }
                                         id
                                     };
                                     match field_id {
                                         #(#match_arms_enum_named)*
-                                        _unknown_id => { senax_encoder::skip_value(reader)?; }
+                                        _unknown_id => { senax_encoder::core::skip_value(reader)?; }
                                     }
                                 }
                                 Ok(#name::#variant_ident { #(#struct_assignments_enum_named)* })
@@ -895,22 +895,22 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                 }
                 let tag = reader.get_u8();
                 match tag {
-                    senax_encoder::TAG_ENUM => {
-                        let variant_id = senax_encoder::read_field_id_optimized(reader)?;
+                    senax_encoder::core::TAG_ENUM => {
+                        let variant_id = senax_encoder::core::read_field_id_optimized(reader)?;
                         match variant_id {
                             #(#unit_variant_arms)*
                             _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown unit variant ID: 0x{:016X} for enum {}", variant_id, stringify!(#name))))
                         }
                     }
-                    senax_encoder::TAG_ENUM_NAMED => {
-                        let variant_id = senax_encoder::read_field_id_optimized(reader)?;
+                    senax_encoder::core::TAG_ENUM_NAMED => {
+                        let variant_id = senax_encoder::core::read_field_id_optimized(reader)?;
                         match variant_id {
                             #(#named_variant_arms)*
                             _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown named variant ID: 0x{:016X} for enum {}", variant_id, stringify!(#name))))
                         }
                     }
-                    senax_encoder::TAG_ENUM_UNNAMED => {
-                        let variant_id = senax_encoder::read_field_id_optimized(reader)?;
+                    senax_encoder::core::TAG_ENUM_UNNAMED => {
+                        let variant_id = senax_encoder::core::read_field_id_optimized(reader)?;
                         match variant_id {
                              #(#unnamed_variant_arms)*
                             _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown unnamed variant ID: 0x{:016X} for enum {}", variant_id, stringify!(#name))))

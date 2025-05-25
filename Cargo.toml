@@ -3,7 +3,7 @@ members = ["derive"]
 
 [package]
 name = "senax-encoder"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2021"
 description = "A fast, compact, and schema-evolution-friendly binary serialization library for Rust."
 authors = ["yossyX"]
