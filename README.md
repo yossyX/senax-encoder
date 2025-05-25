@@ -1,3 +1,5 @@
+[![Latest version](https://img.shields.io/crates/v/senax.svg)](https://crates.io/crates/senax-encoder)
+
 # senax-encoder
 
 A fast, compact, and schema-evolution-friendly binary serialization library for Rust.

@@ -37,6 +37,11 @@ fn calculate_id_from_name(name: &str) -> u64 {
     }
 }
 
+/// Check if a variant has the #[default] attribute
+fn has_default_attribute(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| attr.path().is_ident("default"))
+}
+
 /// Field attributes parsed from `#[senax(...)]` annotations
 ///
 /// This struct represents the various attributes that can be applied to fields
@@ -273,6 +278,8 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
+    let mut default_variant_checks = Vec::new();
+
     let encode_fields = match &input.data {
         Data::Struct(s) => match &s.fields {
             Fields::Named(fields) => {
@@ -306,7 +313,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                     } else if field_attrs.skip_default {
                         // For skip_default fields, check if the value is default before encoding
                         field_encode.push(quote! {
-                            if !self.#field_ident.is_default() {
+                            if senax_encoder::Encoder::is_default(&self.#field_ident) == false {
                                 senax_encoder::write_field_id_optimized(writer, #field_id)?;
                                 self.#field_ident.encode(writer)?;
                             }
@@ -351,12 +358,74 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                 let variant_name_str = v.ident.to_string();
                 let variant_attrs = get_field_attributes(&v.attrs, &variant_name_str);
                 let variant_id = variant_attrs.id;
+                let is_default_variant = has_default_attribute(&v.attrs);
 
                 if !used_ids_enum.insert(variant_id) {
                     panic!("Variant ID (0x{:016X}) is duplicated for enum '{}'. Please specify a different ID for variant '{}' using #[senax(id=...)].", variant_id, name, variant_name_str);
                 }
 
                 let variant_ident = &v.ident;
+
+                // Generate is_default check for this variant if it has #[default] attribute
+                if is_default_variant {
+                    match &v.fields {
+                        Fields::Named(fields) => {
+                            let field_idents: Vec<_> = fields
+                                .named
+                                .iter()
+                                .map(|f| f.ident.as_ref().unwrap())
+                                .collect();
+                            let field_default_checks: Vec<_> = field_idents
+                                .iter()
+                                .map(|ident| {
+                                    quote! { senax_encoder::Encoder::is_default(#ident) }
+                                })
+                                .collect();
+
+                            if field_default_checks.is_empty() {
+                                default_variant_checks.push(quote! {
+                                    #name::#variant_ident { .. } => true,
+                                });
+                            } else {
+                                default_variant_checks.push(quote! {
+                                    #name::#variant_ident { #(#field_idents),* } => {
+                                        #(#field_default_checks)&&*
+                                    },
+                                });
+                            }
+                        }
+                        Fields::Unnamed(fields) => {
+                            let field_count = fields.unnamed.len();
+                            let field_bindings: Vec<_> = (0..field_count)
+                                .map(|i| Ident::new(&format!("field{}", i), Span::call_site()))
+                                .collect();
+                            let field_default_checks: Vec<_> = field_bindings
+                                .iter()
+                                .map(|binding| {
+                                    quote! { senax_encoder::Encoder::is_default(#binding) }
+                                })
+                                .collect();
+
+                            if field_default_checks.is_empty() {
+                                default_variant_checks.push(quote! {
+                                    #name::#variant_ident(..) => true,
+                                });
+                            } else {
+                                default_variant_checks.push(quote! {
+                                    #name::#variant_ident(#(#field_bindings),*) => {
+                                        #(#field_default_checks)&&*
+                                    },
+                                });
+                            }
+                        }
+                        Fields::Unit => {
+                            default_variant_checks.push(quote! {
+                                #name::#variant_ident => true,
+                            });
+                        }
+                    }
+                }
+
                 match &v.fields {
                     Fields::Named(fields) => {
                         let field_idents: Vec<_> = fields
@@ -392,7 +461,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                             } else if field_attrs.skip_default {
                                 // For skip_default fields, check if the value is default before encoding
                                 field_encode.push(quote! {
-                                    if !#field_ident.is_default() {
+                                    if senax_encoder::Encoder::is_default(#field_ident) == false {
                                         senax_encoder::write_field_id_optimized(writer, #field_id)?;
                                         #field_ident.encode(writer)?;
                                     }
@@ -450,6 +519,22 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
         Data::Union(_) => unimplemented!("Unions are not supported"),
     };
 
+    let is_default_impl = match &input.data {
+        Data::Enum(_) => {
+            if default_variant_checks.is_empty() {
+                quote! { false }
+            } else {
+                quote! {
+                    match self {
+                        #(#default_variant_checks)*
+                        _ => false,
+                    }
+                }
+            }
+        }
+        _ => quote! { false },
+    };
+
     TokenStream::from(quote! {
         impl #impl_generics senax_encoder::Encoder for #name #ty_generics #where_clause {
             fn encode(&self, writer: &mut bytes::BytesMut) -> senax_encoder::Result<()> {
@@ -459,7 +544,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
             }
 
             fn is_default(&self) -> bool {
-                false // Structs and enums always return false
+                #is_default_impl
             }
         }
     })

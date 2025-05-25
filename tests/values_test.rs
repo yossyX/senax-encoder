@@ -2363,3 +2363,113 @@ fn test_nested_unnamed_structs() {
 
     assert_eq!(outer_none, decoded2);
 }
+
+#[test]
+fn test_enum_field_skip_default() {
+    use senax_encoder::{Decoder, Encoder};
+
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    enum TestEnumSkipDefault {
+        VariantA {
+            #[senax(skip_default)]
+            optional_field: i32,
+            normal_field: String,
+            #[senax(skip_default)]
+            default_string: String,
+        },
+        VariantB {
+            value: u64,
+        },
+    }
+
+    // Test with default values - should be skipped during encoding
+    let test_default = TestEnumSkipDefault::VariantA {
+        optional_field: 0, // default value
+        normal_field: "hello".to_string(),
+        default_string: "".to_string(), // default value
+    };
+
+    let mut buffer = BytesMut::new();
+    test_default.encode(&mut buffer).unwrap();
+    let buffer1_len = buffer.len();
+
+    // Decode and verify
+    let mut reader = buffer.freeze();
+    let decoded = TestEnumSkipDefault::decode(&mut reader).unwrap();
+    assert_eq!(test_default, decoded);
+
+    // Test with non-default values - should be encoded
+    let test_non_default = TestEnumSkipDefault::VariantA {
+        optional_field: 42, // non-default value
+        normal_field: "world".to_string(),
+        default_string: "non-empty".to_string(), // non-default value
+    };
+
+    let mut buffer2 = BytesMut::new();
+    test_non_default.encode(&mut buffer2).unwrap();
+    let buffer2_len = buffer2.len();
+
+    // Decode and verify
+    let mut reader2 = buffer2.freeze();
+    let decoded2 = TestEnumSkipDefault::decode(&mut reader2).unwrap();
+    assert_eq!(test_non_default, decoded2);
+
+    // Buffer with default values should be smaller than buffer with non-default values
+    // (since default fields are skipped)
+    assert!(buffer1_len < buffer2_len);
+}
+
+#[test]
+fn test_enum_default_attribute() {
+    use senax_encoder::{Decoder, Encoder};
+
+    #[derive(Default, Encode, Decode, Debug, PartialEq)]
+    enum Padding {
+        Space,
+        Zero,
+        #[default]
+        None,
+    }
+
+    #[derive(Default, Encode, Decode, Debug, PartialEq)]
+    enum Status {
+        #[default]
+        Inactive,
+        Active {
+            enabled: bool,
+        },
+        Pending(String),
+    }
+
+    // Test unit variant with #[default]
+    let default_padding = Padding::default();
+    assert_eq!(default_padding, Padding::None);
+
+    // Test that the default variant returns true for is_default()
+    assert!(default_padding.is_default());
+    assert!(!Padding::Space.is_default());
+    assert!(!Padding::Zero.is_default());
+
+    // Test struct variant with #[default]
+    let default_status = Status::default();
+    assert_eq!(default_status, Status::Inactive);
+    assert!(default_status.is_default());
+    assert!(!Status::Active { enabled: true }.is_default());
+    assert!(!Status::Active { enabled: false }.is_default()); // Even with default field values
+    assert!(!Status::Pending("test".to_string()).is_default());
+
+    // Test encoding/decoding
+    let mut buffer = BytesMut::new();
+    default_padding.encode(&mut buffer).unwrap();
+    let mut reader = buffer.freeze();
+    let decoded_padding = Padding::decode(&mut reader).unwrap();
+    assert_eq!(default_padding, decoded_padding);
+    assert!(decoded_padding.is_default());
+
+    let mut buffer2 = BytesMut::new();
+    default_status.encode(&mut buffer2).unwrap();
+    let mut reader2 = buffer2.freeze();
+    let decoded_status = Status::decode(&mut reader2).unwrap();
+    assert_eq!(default_status, decoded_status);
+    assert!(decoded_status.is_default());
+}
