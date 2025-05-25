@@ -5,7 +5,7 @@
 A fast, compact, and schema-evolution-friendly binary serialization library for Rust.
 
 - Supports struct/enum encoding with field/variant IDs for forward/backward compatibility
-- Efficient encoding for primitives, collections, Option, String, bytes, and popular crates (chrono, uuid, ulid, rust_decimal, indexmap, serde_json)
+- Efficient encoding for primitives, collections, Option, String, bytes, and popular crates (chrono, uuid, ulid, rust_decimal, indexmap, fxhash, ahash, smol_str, serde_json)
 - Custom derive macros for ergonomic usage
 - Feature-gated support for optional dependencies
 
@@ -37,6 +37,9 @@ The following optional features enable support for popular crates and types:
 - `ulid` — Enables encoding/decoding of `ulid::Ulid` (shares the same tag as UUID for binary compatibility).
 - `rust_decimal` — Enables encoding/decoding of `rust_decimal::Decimal`.
 - `indexmap` — Enables encoding/decoding of `IndexMap` and `IndexSet` collections.
+- `fxhash` — Enables encoding/decoding of `fxhash::FxHashMap` and `fxhash::FxHashSet` (fast hash collections).
+- `ahash` — Enables encoding/decoding of `ahash::AHashMap` and `ahash::AHashSet` (high-performance hash collections).
+- `smol_str` — Enables encoding/decoding of `smol_str::SmolStr` (small string optimization).
 - `serde_json` — Enables encoding/decoding of `serde_json::Value` for dynamic JSON data.
 
 ## Example
@@ -131,6 +134,13 @@ When respective features are enabled:
 
 - **chrono**: `DateTime<Utc>`, `DateTime<Local>`, `NaiveDate`, `NaiveTime`
 - **uuid**: `Uuid`
+- **ulid**: `Ulid`
+- **rust_decimal**: `Decimal`
+- **indexmap**: `IndexMap`, `IndexSet`
+- **fxhash**: `FxHashMap`, `FxHashSet` (fast hash collections)
+- **ahash**: `AHashMap`, `AHashSet` (high-performance hash collections)
+- **smol_str**: `SmolStr` (small string optimization)
+- **serde_json**: `Value` (dynamic JSON data)
 
 ## Type Compatibility and Cross-Decoding
 

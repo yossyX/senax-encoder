@@ -2473,3 +2473,246 @@ fn test_enum_default_attribute() {
     assert_eq!(default_status, decoded_status);
     assert!(decoded_status.is_default());
 }
+
+#[cfg(feature = "fxhash")]
+#[test]
+fn test_fxhashmap_encode_decode() {
+    use fxhash::FxHashMap;
+
+    let mut map = FxHashMap::default();
+    map.insert("key1".to_string(), 42u32);
+    map.insert("key2".to_string(), 100u32);
+
+    let mut buf = BytesMut::new();
+    map.encode(&mut buf).unwrap();
+
+    let decoded: FxHashMap<String, u32> = FxHashMap::decode(&mut buf.freeze()).unwrap();
+    assert_eq!(decoded.len(), 2);
+    assert_eq!(decoded.get("key1"), Some(&42));
+    assert_eq!(decoded.get("key2"), Some(&100));
+
+    // Test is_default
+    let empty_map: FxHashMap<String, u32> = FxHashMap::default();
+    assert!(empty_map.is_default());
+    assert!(!map.is_default());
+}
+
+#[cfg(feature = "ahash")]
+#[test]
+fn test_ahashmap_encode_decode() {
+    use ahash::AHashMap;
+
+    let mut map = AHashMap::new();
+    map.insert("key1".to_string(), 42u32);
+    map.insert("key2".to_string(), 100u32);
+
+    let mut buf = BytesMut::new();
+    map.encode(&mut buf).unwrap();
+
+    let decoded: AHashMap<String, u32> = AHashMap::decode(&mut buf.freeze()).unwrap();
+    assert_eq!(decoded.len(), 2);
+    assert_eq!(decoded.get("key1"), Some(&42));
+    assert_eq!(decoded.get("key2"), Some(&100));
+
+    // Test is_default
+    let empty_map: AHashMap<String, u32> = AHashMap::new();
+    assert!(empty_map.is_default());
+    assert!(!map.is_default());
+}
+
+#[cfg(feature = "fxhash")]
+#[test]
+fn test_fxhashset_encode_decode() {
+    use fxhash::FxHashSet;
+
+    let mut set = FxHashSet::default();
+    set.insert("item1".to_string());
+    set.insert("item2".to_string());
+    set.insert("item3".to_string());
+
+    let mut buf = BytesMut::new();
+    set.encode(&mut buf).unwrap();
+
+    let decoded: FxHashSet<String> = FxHashSet::decode(&mut buf.freeze()).unwrap();
+    assert_eq!(decoded.len(), 3);
+    assert!(decoded.contains("item1"));
+    assert!(decoded.contains("item2"));
+    assert!(decoded.contains("item3"));
+
+    // Test is_default
+    let empty_set: FxHashSet<String> = FxHashSet::default();
+    assert!(empty_set.is_default());
+    assert!(!set.is_default());
+}
+
+#[cfg(feature = "ahash")]
+#[test]
+fn test_ahashset_encode_decode() {
+    use ahash::AHashSet;
+
+    let mut set = AHashSet::new();
+    set.insert("item1".to_string());
+    set.insert("item2".to_string());
+    set.insert("item3".to_string());
+
+    let mut buf = BytesMut::new();
+    set.encode(&mut buf).unwrap();
+
+    let decoded: AHashSet<String> = AHashSet::decode(&mut buf.freeze()).unwrap();
+    assert_eq!(decoded.len(), 3);
+    assert!(decoded.contains("item1"));
+    assert!(decoded.contains("item2"));
+    assert!(decoded.contains("item3"));
+
+    // Test is_default
+    let empty_set: AHashSet<String> = AHashSet::new();
+    assert!(empty_set.is_default());
+    assert!(!set.is_default());
+}
+
+#[cfg(feature = "smol_str")]
+#[test]
+fn test_smolstr_encode_decode() {
+    use smol_str::SmolStr;
+
+    // Test various SmolStr values
+    let test_values = vec![
+        SmolStr::new(""),                       // Empty string
+        SmolStr::new("short"),                  // Short string
+        SmolStr::new("Hello, World!"),          // Medium string
+        SmolStr::new("こんにちは世界"),         // Unicode string
+        SmolStr::new("a".repeat(100)),          // Long string
+        SmolStr::new("🚀 Rust is awesome! 🦀"), // Emoji string
+    ];
+
+    for original in &test_values {
+        let mut buf = BytesMut::new();
+        original.encode(&mut buf).unwrap();
+
+        let decoded = SmolStr::decode(&mut buf.freeze()).unwrap();
+        assert_eq!(
+            original, &decoded,
+            "Failed roundtrip for SmolStr: {}",
+            original
+        );
+    }
+
+    // Test is_default
+    let empty_smolstr = SmolStr::new("");
+    assert!(empty_smolstr.is_default());
+
+    let non_empty_smolstr = SmolStr::new("test");
+    assert!(!non_empty_smolstr.is_default());
+}
+
+#[cfg(feature = "smol_str")]
+#[test]
+fn test_smolstr_string_compatibility() {
+    use smol_str::SmolStr;
+
+    // Test that SmolStr can decode from String-encoded data
+    let original_string = "Hello, SmolStr!";
+    let mut buf = BytesMut::new();
+    original_string.to_string().encode(&mut buf).unwrap();
+
+    let decoded_smolstr = SmolStr::decode(&mut buf.freeze()).unwrap();
+    assert_eq!(decoded_smolstr.as_str(), original_string);
+
+    // Test that String can decode from SmolStr-encoded data
+    let original_smolstr = SmolStr::new("Hello, String!");
+    let mut buf2 = BytesMut::new();
+    original_smolstr.encode(&mut buf2).unwrap();
+
+    let decoded_string = String::decode(&mut buf2.freeze()).unwrap();
+    assert_eq!(decoded_string, original_smolstr.as_str());
+}
+
+#[cfg(feature = "smol_str")]
+#[test]
+fn test_smolstr_in_struct() {
+    use smol_str::SmolStr;
+
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct SmolStrStruct {
+        name: SmolStr,
+        description: Option<SmolStr>,
+        tags: Vec<SmolStr>,
+    }
+
+    let test_struct = SmolStrStruct {
+        name: SmolStr::new("test_name"),
+        description: Some(SmolStr::new("test description")),
+        tags: vec![
+            SmolStr::new("tag1"),
+            SmolStr::new("tag2"),
+            SmolStr::new("tag3"),
+        ],
+    };
+
+    let mut buf = BytesMut::new();
+    test_struct.encode(&mut buf).unwrap();
+
+    let decoded = SmolStrStruct::decode(&mut buf.freeze()).unwrap();
+    assert_eq!(test_struct, decoded);
+}
+
+#[cfg(feature = "smol_str")]
+#[test]
+fn test_smolstr_in_collections() {
+    use smol_str::SmolStr;
+    use std::collections::HashMap;
+
+    // Test Vec<SmolStr>
+    let smolstr_vec = vec![
+        SmolStr::new("first"),
+        SmolStr::new("second"),
+        SmolStr::new("third"),
+    ];
+
+    let mut buf = BytesMut::new();
+    smolstr_vec.encode(&mut buf).unwrap();
+
+    let decoded_vec: Vec<SmolStr> = Vec::decode(&mut buf.freeze()).unwrap();
+    assert_eq!(smolstr_vec, decoded_vec);
+
+    // Test HashMap<SmolStr, String>
+    let mut smolstr_map = HashMap::new();
+    smolstr_map.insert(SmolStr::new("key1"), "value1".to_string());
+    smolstr_map.insert(SmolStr::new("key2"), "value2".to_string());
+
+    let mut buf2 = BytesMut::new();
+    smolstr_map.encode(&mut buf2).unwrap();
+
+    let decoded_map: HashMap<SmolStr, String> = HashMap::decode(&mut buf2.freeze()).unwrap();
+    assert_eq!(smolstr_map, decoded_map);
+}
+
+#[cfg(all(feature = "fxhash", feature = "ahash", feature = "smol_str"))]
+#[test]
+fn test_combined_features() {
+    use ahash::AHashMap;
+    use fxhash::FxHashSet;
+    use smol_str::SmolStr;
+
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct CombinedStruct {
+        fx_set: FxHashSet<SmolStr>,
+        a_map: AHashMap<SmolStr, u32>,
+    }
+
+    let mut fx_set = FxHashSet::default();
+    fx_set.insert(SmolStr::new("item1"));
+    fx_set.insert(SmolStr::new("item2"));
+
+    let mut a_map = AHashMap::new();
+    a_map.insert(SmolStr::new("key1"), 100);
+    a_map.insert(SmolStr::new("key2"), 200);
+
+    let combined = CombinedStruct { fx_set, a_map };
+
+    let mut buf = BytesMut::new();
+    combined.encode(&mut buf).unwrap();
+
+    let decoded = CombinedStruct::decode(&mut buf.freeze()).unwrap();
+    assert_eq!(combined, decoded);
+}

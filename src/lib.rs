@@ -3,7 +3,7 @@
 //! A fast, compact, and schema-evolution-friendly binary serialization library for Rust.
 //!
 //! - Supports struct/enum encoding with field/variant IDs for forward/backward compatibility
-//! - Efficient encoding for primitives, collections, Option, String, bytes, and popular crates (chrono, uuid, ulid, rust_decimal, indexmap)
+//! - Efficient encoding for primitives, collections, Option, String, bytes, and popular crates (chrono, uuid, ulid, rust_decimal, indexmap, fxhash, ahash, smol_str)
 //! - Custom derive macros for ergonomic usage
 //! - Feature-gated support for optional dependencies
 //!
@@ -27,6 +27,9 @@
 //! - `ulid` — Enables encoding/decoding of `ulid::Ulid` (shares the same tag as UUID for binary compatibility).
 //! - `rust_decimal` — Enables encoding/decoding of `rust_decimal::Decimal`.
 //! - `indexmap` — Enables encoding/decoding of `IndexMap` and `IndexSet` collections.
+//! - `fxhash` — Enables encoding/decoding of `fxhash::FxHashMap` and `fxhash::FxHashSet` (fast hash collections).
+//! - `ahash` — Enables encoding/decoding of `ahash::AHashMap` and `ahash::AHashSet` (high-performance hash collections).
+//! - `smol_str` — Enables encoding/decoding of `smol_str::SmolStr` (small string optimization).
 //! - `serde_json` — Enables encoding/decoding of `serde_json::Value` (JSON values as dynamic type).
 //!
 //! ## Example
@@ -47,9 +50,13 @@
 //! assert_eq!(value, decoded);
 //! ```
 
+#[cfg(feature = "ahash")]
+use ahash::{AHashMap, AHashSet};
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, Timelike, Utc};
+#[cfg(feature = "fxhash")]
+use fxhash::{FxHashMap, FxHashSet};
 #[cfg(feature = "indexmap")]
 use indexmap::{IndexMap, IndexSet};
 #[cfg(feature = "rust_decimal")]
@@ -57,6 +64,8 @@ use rust_decimal::Decimal;
 pub use senax_encoder_derive::{Decode, Encode};
 #[cfg(feature = "serde_json")]
 use serde_json::{Map, Number, Value};
+#[cfg(feature = "smol_str")]
+use smol_str::SmolStr;
 use std::collections::HashMap;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
@@ -157,9 +166,9 @@ pub const TAG_F32: u8 = 137;
 pub const TAG_F64: u8 = 138;
 ///< f64
 pub const TAG_STRING_BASE: u8 = 139;
-///< Short string (length in tag)
+///< Short string (length in tag) - String, SmolStr
 pub const TAG_STRING_LONG: u8 = 180;
-///< Long string (length encoded)
+///< Long string (length encoded) - String, SmolStr
 pub const TAG_BINARY: u8 = 181;
 ///< Vec<u8> or Bytes
 pub const TAG_STRUCT_UNIT: u8 = 182;
@@ -175,13 +184,13 @@ pub const TAG_ENUM_NAMED: u8 = 186;
 pub const TAG_ENUM_UNNAMED: u8 = 187;
 ///< Enum with tuple fields
 pub const TAG_ARRAY_VEC_SET_BASE: u8 = 188;
-///< Short array/vec/set (length in tag)
+///< Short array/vec/set (length in tag) - includes HashSet, BTreeSet, IndexSet, FxHashSet, AHashSet
 pub const TAG_ARRAY_VEC_SET_LONG: u8 = 194;
-///< Long array/vec/set (length encoded)
+///< Long array/vec/set (length encoded) - includes HashSet, BTreeSet, IndexSet, FxHashSet, AHashSet
 pub const TAG_TUPLE: u8 = 195;
 ///< Tuple
 pub const TAG_MAP: u8 = 196;
-///< Map (HashMap, BTreeMap, IndexMap)
+///< Map (HashMap, BTreeMap, IndexMap, FxHashMap, AHashMap)
 pub const TAG_CHRONO_DATETIME: u8 = 197;
 ///< chrono::DateTime
 pub const TAG_CHRONO_NAIVE_DATE: u8 = 198;
@@ -2265,5 +2274,208 @@ impl<T: Encoder> Encoder for &T {
 
     fn is_default(&self) -> bool {
         (*self).is_default()
+    }
+}
+
+// --- FxHashMap ---
+#[cfg(feature = "fxhash")]
+impl<K: Encoder + Eq + std::hash::Hash, V: Encoder> Encoder for FxHashMap<K, V> {
+    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+        writer.put_u8(TAG_MAP);
+        let len = self.len();
+        len.encode(writer)?;
+        for (k, v) in self {
+            k.encode(writer)?;
+            v.encode(writer)?;
+        }
+        Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        self.is_empty()
+    }
+}
+#[cfg(feature = "fxhash")]
+impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for FxHashMap<K, V> {
+    fn decode(reader: &mut Bytes) -> Result<Self> {
+        if reader.remaining() == 0 {
+            return Err(EncoderError::InsufficientData);
+        }
+        let tag = reader.get_u8();
+        if tag != TAG_MAP {
+            return Err(EncoderError::Decode(format!(
+                "Expected Map tag ({}), got {}",
+                TAG_MAP, tag
+            )));
+        }
+        let len = usize::decode(reader)?;
+        let mut map = FxHashMap::with_capacity_and_hasher(len, Default::default());
+        for _ in 0..len {
+            let k = K::decode(reader)?;
+            let v = V::decode(reader)?;
+            map.insert(k, v);
+        }
+        Ok(map)
+    }
+}
+
+// --- AHashMap ---
+#[cfg(feature = "ahash")]
+impl<K: Encoder + Eq + std::hash::Hash, V: Encoder> Encoder for AHashMap<K, V> {
+    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+        writer.put_u8(TAG_MAP);
+        let len = self.len();
+        len.encode(writer)?;
+        for (k, v) in self {
+            k.encode(writer)?;
+            v.encode(writer)?;
+        }
+        Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        self.is_empty()
+    }
+}
+#[cfg(feature = "ahash")]
+impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for AHashMap<K, V> {
+    fn decode(reader: &mut Bytes) -> Result<Self> {
+        if reader.remaining() == 0 {
+            return Err(EncoderError::InsufficientData);
+        }
+        let tag = reader.get_u8();
+        if tag != TAG_MAP {
+            return Err(EncoderError::Decode(format!(
+                "Expected Map tag ({}), got {}",
+                TAG_MAP, tag
+            )));
+        }
+        let len = usize::decode(reader)?;
+        let mut map = AHashMap::with_capacity(len);
+        for _ in 0..len {
+            let k = K::decode(reader)?;
+            let v = V::decode(reader)?;
+            map.insert(k, v);
+        }
+        Ok(map)
+    }
+}
+
+// --- FxHashSet ---
+#[cfg(feature = "fxhash")]
+impl<T: Encoder + Eq + std::hash::Hash> Encoder for FxHashSet<T> {
+    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+        let len = self.len();
+        let max_short = (TAG_ARRAY_VEC_SET_LONG - TAG_ARRAY_VEC_SET_BASE - 1) as usize;
+        if len <= max_short {
+            let tag = TAG_ARRAY_VEC_SET_BASE + len as u8;
+            writer.put_u8(tag);
+            for v in self {
+                v.encode(writer)?;
+            }
+        } else {
+            writer.put_u8(TAG_ARRAY_VEC_SET_LONG);
+            len.encode(writer)?;
+            for v in self {
+                v.encode(writer)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        self.is_empty()
+    }
+}
+#[cfg(feature = "fxhash")]
+impl<T: Decoder + Eq + std::hash::Hash + 'static> Decoder for FxHashSet<T> {
+    fn decode(reader: &mut Bytes) -> Result<Self> {
+        let vec: Vec<T> = Vec::decode(reader)?;
+        Ok(vec.into_iter().collect())
+    }
+}
+
+// --- AHashSet ---
+#[cfg(feature = "ahash")]
+impl<T: Encoder + Eq + std::hash::Hash> Encoder for AHashSet<T> {
+    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+        let len = self.len();
+        let max_short = (TAG_ARRAY_VEC_SET_LONG - TAG_ARRAY_VEC_SET_BASE - 1) as usize;
+        if len <= max_short {
+            let tag = TAG_ARRAY_VEC_SET_BASE + len as u8;
+            writer.put_u8(tag);
+            for v in self {
+                v.encode(writer)?;
+            }
+        } else {
+            writer.put_u8(TAG_ARRAY_VEC_SET_LONG);
+            len.encode(writer)?;
+            for v in self {
+                v.encode(writer)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        self.is_empty()
+    }
+}
+#[cfg(feature = "ahash")]
+impl<T: Decoder + Eq + std::hash::Hash + 'static> Decoder for AHashSet<T> {
+    fn decode(reader: &mut Bytes) -> Result<Self> {
+        let vec: Vec<T> = Vec::decode(reader)?;
+        Ok(vec.into_iter().collect())
+    }
+}
+
+// --- SmolStr ---
+#[cfg(feature = "smol_str")]
+impl Encoder for SmolStr {
+    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+        let len = self.len();
+        let max_short = (TAG_STRING_LONG - TAG_STRING_BASE - 1) as usize;
+        if len <= max_short {
+            let tag = TAG_STRING_BASE + len as u8;
+            writer.put_u8(tag);
+            writer.put_slice(self.as_bytes());
+        } else {
+            writer.put_u8(TAG_STRING_LONG);
+            len.encode(writer)?;
+            writer.put_slice(self.as_bytes());
+        }
+        Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        self.is_empty()
+    }
+}
+#[cfg(feature = "smol_str")]
+impl Decoder for SmolStr {
+    fn decode(reader: &mut Bytes) -> Result<Self> {
+        if reader.remaining() == 0 {
+            return Err(EncoderError::InsufficientData);
+        }
+        let tag = reader.get_u8();
+        let len = if (TAG_STRING_BASE..TAG_STRING_LONG).contains(&tag) {
+            (tag - TAG_STRING_BASE) as usize
+        } else if tag == TAG_STRING_LONG {
+            usize::decode(reader)?
+        } else {
+            return Err(EncoderError::Decode(format!(
+                "Expected String tag ({}..={}), got {}",
+                TAG_STRING_BASE, TAG_STRING_LONG, tag
+            )));
+        };
+        if reader.remaining() < len {
+            return Err(EncoderError::InsufficientData);
+        }
+        let mut bytes = vec![0u8; len];
+        if len > 0 {
+            reader.copy_to_slice(&mut bytes);
+        }
+        let string = String::from_utf8(bytes).map_err(|e| EncoderError::Decode(e.to_string()))?;
+        Ok(SmolStr::new(string))
     }
 }

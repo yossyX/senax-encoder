@@ -3,7 +3,7 @@ members = ["derive"]
 
 [package]
 name = "senax-encoder"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "A fast, compact, and schema-evolution-friendly binary serialization library for Rust."
 authors = ["yossyX"]
@@ -20,6 +20,9 @@ rust_decimal = ["dep:rust_decimal"]
 uuid = ["dep:uuid"]
 ulid = ["dep:ulid"]
 serde_json = ["dep:serde_json"]
+fxhash = ["dep:fxhash"]
+ahash = ["dep:ahash"]
+smol_str = ["dep:smol_str"]
 
 [dependencies]
 thiserror = "1.0"
@@ -31,3 +34,6 @@ rust_decimal = { version = "1.35", optional = true }
 uuid = { version = "1.8", features = ["v4"], optional = true }
 ulid = { version = "1.1", optional = true }
 serde_json = { version = "1.0", optional = true }
+fxhash = { version = "0.2", optional = true }
+ahash = { version = "0.8", optional = true }
+smol_str = { version = "0.3", optional = true }
