@@ -1692,7 +1692,7 @@ fn test_u8_optimization_boundaries() {
     // Test TAG_U8 optimization boundaries
     let test_cases = [
         // TAG_ZERO boundaries
-        (127u16, vec![130]), // TAG_ZERO + 127 = 130
+        (127u16, vec![127]), // TAG_ZERO + 127 = 127
         // TAG_U8 range
         (128u16, vec![131, 0]),   // TAG_U8, 128-128=0
         (383u16, vec![131, 255]), // TAG_U8, 383-128=255 (max)

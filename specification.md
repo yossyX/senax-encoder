@@ -1,7 +1,7 @@
 # senax-encoder Binary Format Specification
 
-**Version:** 1.0  
-**Date:** 2024  
+**Version:** 1.1  
+**Date:** 2025  
 **Status:** Draft
 
 ## Table of Contents
@@ -90,14 +90,13 @@ This optimization significantly reduces binary size for typical structs and enum
 
 Tags are assigned in ranges for semantic grouping:
 ```rust
-pub const TAG_NONE: u8 = 1;
-pub const TAG_SOME: u8 = 2;
-pub const TAG_ZERO: u8 = 3;
-pub const TAG_ONE: u8 = 4;
-// 5-130: Direct encoding for values 2-127
-pub const TAG_U8_2_BASE: u8 = 5;     // Value 2
-pub const TAG_U8_127: u8 = 130;      // Value 127
+pub const TAG_ZERO: u8 = 0;
+pub const TAG_ONE: u8 = 1;
+// 2-127: Direct encoding for values 2-127
+pub const TAG_U8_127: u8 = 127;      // Value 127
 // Extended integer types
+pub const TAG_NONE: u8 = 128;
+pub const TAG_SOME: u8 = 129;
 pub const TAG_U8: u8 = 131;
 pub const TAG_U16: u8 = 132;
 pub const TAG_U32: u8 = 133;
@@ -135,13 +134,13 @@ pub const TAG_UUID: u8 = 201;  // Shared by UUID and ULID
 ### 4.1 Boolean
 
 **Encoding:**
-- `false`: `TAG_ZERO` (0x03)
-- `true`: `TAG_ONE` (0x04)
+- `false`: `TAG_ZERO` (0x00)
+- `true`: `TAG_ONE` (0x01)
 
 **Example:**
 ```
-true  -> [0x04]
-false -> [0x03]
+true  -> [0x01]
+false -> [0x00]
 ```
 
 ### 4.2 Unsigned Integers
@@ -166,7 +165,7 @@ u128  -> [TAG_U128] [value:u128_le]     (range: 18446744073709551616+)
 
 **Examples:**
 ```
-42     -> [0x2D]           // TAG_ZERO + 42 = 3 + 42 = 45 = 0x2D
+42     -> [0x2A]           // TAG_ZERO + 42 = 0 + 42 = 42 = 0x2A
 128    -> [0x83, 0x00]     // TAG_U8, 128-128=0
 255    -> [0x83, 0x7F]     // TAG_U8, 255-128=127
 383    -> [0x83, 0xFF]     // TAG_U8, 383-128=255
@@ -176,8 +175,8 @@ u128  -> [TAG_U128] [value:u128_le]     (range: 18446744073709551616+)
 ### 4.3 Signed Integers
 
 **Special Cases:**
-- `0`: `TAG_ZERO` (0x03)
-- `1`: `TAG_ONE` (0x04)
+- `0`: `TAG_ZERO` (0x00)
+- `1`: `TAG_ONE` (0x01)
 
 **Encoding Rule:**
 - 0 and positive values: Encoded as unsigned integers
@@ -192,12 +191,12 @@ u128  -> [TAG_U128] [value:u128_le]     (range: 18446744073709551616+)
 ```
 **Examples:**
 ```
-0      -> [0x03]              // TAG_ZERO
-1      -> [0x04]              // TAG_ONE
-2      -> [0x05]              // TAG_ZERO+2
--1     -> [0x88, 0x03]        // TAG_NEGATIVE, !(-1)=0 -> TAG_ZERO
--2     -> [0x88, 0x04]        // TAG_NEGATIVE, !(-2)=1 -> TAG_ONE
--128   -> [0x88, 0x82]        // TAG_NEGATIVE, !(-128)=127 -> TAG_ZERO+127
+0      -> [0x00]              // TAG_ZERO
+1      -> [0x01]              // TAG_ONE
+2      -> [0x02]              // TAG_ZERO+2
+-1     -> [0x88, 0x00]        // TAG_NEGATIVE, !(-1)=0 -> TAG_ZERO
+-2     -> [0x88, 0x01]        // TAG_NEGATIVE, !(-2)=1 -> TAG_ONE
+-128   -> [0x88, 0x7F]        // TAG_NEGATIVE, !(-128)=127 -> TAG_ZERO+127
 ```
 
 ### 4.4 Floating Point
@@ -232,8 +231,8 @@ f64 -> [TAG_F64] [value:f64_le]
 
 **Format:**
 ```
-None    -> [TAG_NONE]
-Some(v) -> [TAG_SOME] [encoded_value]
+None    -> [TAG_NONE]     // 0x80 (128)
+Some(v) -> [TAG_SOME] [encoded_value]  // 0x81 (129) + value
 ```
 
 ### 4.7 Collections
@@ -466,4 +465,4 @@ All multi-byte values use little-endian encoding for consistency across platform
 
 ---
 
-**This specification defines the complete binary format for senax-encoder. Implementations should follow these rules exactly to ensure cross-version and cross-platform compatibility.** 
+**This specification defines the complete binary format for senax-encoder. Implementations should follow these rules exactly to ensure cross-version and cross-platform compatibility.**

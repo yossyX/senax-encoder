@@ -7,69 +7,59 @@ use crate::*;
 ///
 /// - Primitives, Option, String, Vec, arrays, maps, structs, enums, and feature types each have their own tag(s).
 /// - Tags are stable and part of the wire format.
-pub const TAG_NONE: u8 = 1;
-///< Option::None
-pub const TAG_SOME: u8 = 2;
-///< Option::Some
-pub const TAG_ZERO: u8 = 3;
+
 ///< 0 for numbers, false for bool
-pub const TAG_ONE: u8 = 4;
+pub const TAG_ZERO: u8 = 0;
 ///< 1 for numbers, true for bool
 // 5-130: Values 2-127 (compact encoding for small unsigned integers)
-pub const TAG_U8_2_BASE: u8 = 5; // 2
-pub const TAG_U8_127: u8 = 130; // 127
+pub const TAG_ONE: u8 = 1;
+pub const TAG_U8_127: u8 = 127; // 127
+pub const TAG_NONE: u8 = 128;
+pub const TAG_SOME: u8 = 129;
 pub const TAG_U8: u8 = 131;
-///< u8 (full range)
 pub const TAG_U16: u8 = 132;
-///< u16
 pub const TAG_U32: u8 = 133;
-///< u32
 pub const TAG_U64: u8 = 134;
-///< u64
 pub const TAG_U128: u8 = 135;
-///< u128
-pub const TAG_NEGATIVE: u8 = 136;
 ///< Negative signed integer (bit-inverted encoding)
+pub const TAG_NEGATIVE: u8 = 136;
 pub const TAG_F32: u8 = 137;
-///< f32
 pub const TAG_F64: u8 = 138;
-///< f64
-pub const TAG_STRING_BASE: u8 = 139;
 ///< Short string (length in tag) - String, SmolStr
-pub const TAG_STRING_LONG: u8 = 180;
+pub const TAG_STRING_BASE: u8 = 139;
 ///< Long string (length encoded) - String, SmolStr
-pub const TAG_BINARY: u8 = 181;
+pub const TAG_STRING_LONG: u8 = 180;
 ///< Vec<u8> or Bytes
-pub const TAG_STRUCT_UNIT: u8 = 182;
+pub const TAG_BINARY: u8 = 181;
 ///< Unit struct
-pub const TAG_STRUCT_NAMED: u8 = 183;
+pub const TAG_STRUCT_UNIT: u8 = 182;
 ///< Named struct
-pub const TAG_STRUCT_UNNAMED: u8 = 184;
+pub const TAG_STRUCT_NAMED: u8 = 183;
 ///< Tuple struct
+pub const TAG_STRUCT_UNNAMED: u8 = 184;
 pub const TAG_ENUM: u8 = 185;
-///< C-like enum (unit variants)
-pub const TAG_ENUM_NAMED: u8 = 186;
 ///< Enum with named fields
-pub const TAG_ENUM_UNNAMED: u8 = 187;
+pub const TAG_ENUM_NAMED: u8 = 186;
 ///< Enum with tuple fields
-pub const TAG_ARRAY_VEC_SET_BASE: u8 = 188;
+pub const TAG_ENUM_UNNAMED: u8 = 187;
 ///< Short array/vec/set (length in tag) - includes HashSet, BTreeSet, IndexSet, FxHashSet, AHashSet
-pub const TAG_ARRAY_VEC_SET_LONG: u8 = 194;
+pub const TAG_ARRAY_VEC_SET_BASE: u8 = 188;
 ///< Long array/vec/set (length encoded) - includes HashSet, BTreeSet, IndexSet, FxHashSet, AHashSet
-pub const TAG_TUPLE: u8 = 195;
+pub const TAG_ARRAY_VEC_SET_LONG: u8 = 194;
 ///< Tuple
-pub const TAG_MAP: u8 = 196;
+pub const TAG_TUPLE: u8 = 195;
 ///< Map (HashMap, BTreeMap, IndexMap, FxHashMap, AHashMap)
-pub const TAG_CHRONO_DATETIME: u8 = 197;
+pub const TAG_MAP: u8 = 196;
 ///< chrono::DateTime
-pub const TAG_CHRONO_NAIVE_DATE: u8 = 198;
+pub const TAG_CHRONO_DATETIME: u8 = 197;
 ///< chrono::NaiveDate
-pub const TAG_CHRONO_NAIVE_TIME: u8 = 199;
+pub const TAG_CHRONO_NAIVE_DATE: u8 = 198;
 ///< chrono::NaiveTime
-pub const TAG_DECIMAL: u8 = 200;
+pub const TAG_CHRONO_NAIVE_TIME: u8 = 199;
 ///< rust_decimal::Decimal
-pub const TAG_UUID: u8 = 201;
+pub const TAG_DECIMAL: u8 = 200;
 ///< uuid::Uuid, ulid::Ulid
+pub const TAG_UUID: u8 = 201;
 pub const TAG_JSON_NULL: u8 = 202;
 pub const TAG_JSON_BOOL: u8 = 203; // Uses existing TAG_ZERO/TAG_ONE for value
 pub const TAG_JSON_NUMBER: u8 = 204;
@@ -81,7 +71,7 @@ pub const TAG_JSON_OBJECT: u8 = 207;
 /// Encodes a `bool` as a single tag byte: `TAG_ZERO` for `false`, `TAG_ONE` for `true`.
 impl Encoder for bool {
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
-        let tag = if !*self { TAG_ZERO } else { TAG_ONE }; // 3: false, 4: true
+        let tag = if !*self { TAG_ZERO } else { TAG_ONE }; // 0: false, 1: true
         writer.put_u8(tag);
         Ok(())
     }
@@ -119,7 +109,7 @@ impl Decoder for bool {
 /// Returns an error if the tag is not valid for a `u8`.
 #[inline]
 fn decode_u8_from_tag(tag: u8, reader: &mut Bytes) -> Result<u8> {
-    if (TAG_ZERO..=TAG_ZERO + 127).contains(&tag) {
+    if (TAG_ZERO..=TAG_U8_127).contains(&tag) {
         Ok(tag - TAG_ZERO)
     } else if tag == TAG_U8 {
         if reader.remaining() < 1 {
@@ -140,7 +130,7 @@ fn decode_u8_from_tag(tag: u8, reader: &mut Bytes) -> Result<u8> {
 /// Used internally for compact integer decoding.
 #[inline(never)]
 fn decode_u16_from_tag(tag: u8, reader: &mut Bytes) -> Result<u16> {
-    if (TAG_ZERO..=TAG_ZERO + 127).contains(&tag) {
+    if (TAG_ZERO..=TAG_U8_127).contains(&tag) {
         Ok((tag - TAG_ZERO) as u16)
     } else if tag == TAG_U8 {
         if reader.remaining() < 1 {
@@ -163,7 +153,7 @@ fn decode_u16_from_tag(tag: u8, reader: &mut Bytes) -> Result<u16> {
 /// Used internally for compact integer decoding.
 #[inline]
 fn decode_u32_from_tag(tag: u8, reader: &mut Bytes) -> Result<u32> {
-    if (TAG_ZERO..=TAG_ZERO + 127).contains(&tag) {
+    if (TAG_ZERO..=TAG_U8_127).contains(&tag) {
         Ok((tag - TAG_ZERO) as u32)
     } else if tag == TAG_U8 {
         if reader.remaining() < 1 {
@@ -191,7 +181,7 @@ fn decode_u32_from_tag(tag: u8, reader: &mut Bytes) -> Result<u32> {
 /// Used internally for compact integer decoding.
 #[inline]
 fn decode_u64_from_tag(tag: u8, reader: &mut Bytes) -> Result<u64> {
-    if (TAG_ZERO..=TAG_ZERO + 127).contains(&tag) {
+    if (TAG_ZERO..=TAG_U8_127).contains(&tag) {
         Ok((tag - TAG_ZERO) as u64)
     } else if tag == TAG_U8 {
         if reader.remaining() < 1 {
@@ -224,7 +214,7 @@ fn decode_u64_from_tag(tag: u8, reader: &mut Bytes) -> Result<u64> {
 /// Used internally for compact integer decoding.
 #[inline(never)]
 fn decode_u128_from_tag(tag: u8, reader: &mut Bytes) -> Result<u128> {
-    if (TAG_ZERO..=TAG_ZERO + 127).contains(&tag) {
+    if (TAG_ZERO..=TAG_U8_127).contains(&tag) {
         Ok((tag - TAG_ZERO) as u128)
     } else if tag == TAG_U8 {
         if reader.remaining() < 1 {
@@ -1104,9 +1094,6 @@ impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for HashMap<K, V> {
         Ok(map)
     }
 }
-// --- Enum ---
-// Enum is handled by proc-macro with tag TAG_ENUM (see proc-macro side)
-// 32: Enum
 
 /// Writes a `u32` in little-endian format without a tag.
 ///
@@ -1156,8 +1143,7 @@ pub fn skip_value(reader: &mut Bytes) -> Result<()> {
     }
     let tag = reader.get_u8();
     match tag {
-        TAG_ZERO | TAG_ONE => Ok(()),
-        TAG_U8_2_BASE..=TAG_U8_127 => Ok(()),
+        TAG_ZERO..=TAG_U8_127 => Ok(()),
         TAG_U8 => {
             if reader.remaining() < 1 {
                 return Err(EncoderError::InsufficientData);
