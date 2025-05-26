@@ -519,6 +519,104 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
         Data::Union(_) => unimplemented!("Unions are not supported"),
     };
 
+    // Generate pack implementation for structs and enums (no field IDs for struct fields)
+    let pack_fields = match &input.data {
+        Data::Struct(s) => match &s.fields {
+            Fields::Named(fields) => {
+                let field_encode = fields.named.iter().map(|f| {
+                    let field_ident = &f.ident;
+                    quote! {
+                        senax_encoder::Encoder::pack(&self.#field_ident, writer)?;
+                    }
+                });
+                quote! {
+                    #(#field_encode)*
+                }
+            }
+            Fields::Unnamed(fields) => {
+                let field_encode = fields.unnamed.iter().enumerate().map(|(i, _)| {
+                    let index = syn::Index::from(i);
+                    quote! {
+                        senax_encoder::Encoder::pack(&self.#index, writer)?;
+                    }
+                });
+                quote! {
+                    #(#field_encode)*
+                }
+            }
+            Fields::Unit => quote! {},
+        },
+        Data::Enum(e) => {
+            let mut variant_pack = Vec::new();
+            let mut used_ids_enum_pack = HashSet::new();
+
+            for v in &e.variants {
+                let variant_name_str = v.ident.to_string();
+                let variant_attrs = get_field_attributes(&v.attrs, &variant_name_str);
+                let variant_id = variant_attrs.id;
+
+                if !used_ids_enum_pack.insert(variant_id) {
+                    panic!("Variant ID (0x{:016X}) is duplicated for enum '{}'. Please specify a different ID for variant '{}' using #[senax(id=...)].", variant_id, name, variant_name_str);
+                }
+
+                let variant_ident = &v.ident;
+
+                match &v.fields {
+                    Fields::Named(fields) => {
+                        let field_idents: Vec<_> = fields
+                            .named
+                            .iter()
+                            .map(|f| f.ident.as_ref().unwrap())
+                            .collect();
+                        // For pack, encode fields in order without field IDs
+                        let field_pack = field_idents.iter().map(|field_ident| {
+                            quote! {
+                                senax_encoder::Encoder::pack(#field_ident, writer)?;
+                            }
+                        });
+                        variant_pack.push(quote! {
+                            #name::#variant_ident { #(#field_idents),* } => {
+                                writer.put_u8(senax_encoder::core::TAG_ENUM_NAMED);
+                                senax_encoder::core::write_field_id_optimized(writer, #variant_id)?;
+                                #(#field_pack)*
+                            }
+                        });
+                    }
+                    Fields::Unnamed(fields) => {
+                        let field_count = fields.unnamed.len();
+                        let field_bindings: Vec<_> = (0..field_count)
+                            .map(|i| Ident::new(&format!("field{}", i), Span::call_site()))
+                            .collect();
+                        let field_bindings_ref = &field_bindings;
+                        variant_pack.push(quote! {
+                            #name::#variant_ident( #(#field_bindings_ref),* ) => {
+                                writer.put_u8(senax_encoder::core::TAG_ENUM_UNNAMED);
+                                senax_encoder::core::write_field_id_optimized(writer, #variant_id)?;
+                                #(
+                                    senax_encoder::Encoder::pack(&#field_bindings_ref, writer)?;
+                                )*
+                            }
+                        });
+                    }
+                    Fields::Unit => {
+                        variant_pack.push(quote! {
+                            #name::#variant_ident => {
+                                writer.put_u8(senax_encoder::core::TAG_ENUM);
+                                senax_encoder::core::write_field_id_optimized(writer, #variant_id)?;
+                            }
+                        });
+                    }
+                }
+            }
+            quote! {
+                match self {
+                    #(#variant_pack)*
+                }
+            }
+        }
+        Data::Union(_) => unimplemented!("Unions are not supported"),
+    };
+
     let is_default_impl = match &input.data {
         Data::Enum(_) => {
             if default_variant_checks.is_empty() {
@@ -540,6 +638,12 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
             fn encode(&self, writer: &mut bytes::BytesMut) -> senax_encoder::Result<()> {
                 use bytes::{Buf, BufMut};
                 #encode_fields
+                Ok(())
+            }
+
+            fn pack(&self, writer: &mut bytes::BytesMut) -> senax_encoder::Result<()> {
+                use bytes::{Buf, BufMut};
+                #pack_fields
                 Ok(())
             }
 
@@ -923,11 +1027,151 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
         Data::Union(_) => unimplemented!("Unions are not supported"),
     };
 
+    // Generate unpack implementation for structs and enums (no field IDs for struct fields)
+    let unpack_fields = match &input.data {
+        Data::Struct(s) => match &s.fields {
+            Fields::Named(fields) => {
+                let field_assignments = fields.named.iter().map(|f| {
+                    let field_ident = &f.ident;
+                    let field_ty = &f.ty;
+                    quote! {
+                        #field_ident: <#field_ty as senax_encoder::Decoder>::unpack(reader)?,
+                    }
+                });
+                quote! {
+                    Ok(#name {
+                        #(#field_assignments)*
+                    })
+                }
+            }
+            Fields::Unnamed(fields) => {
+                let field_decode = fields.unnamed.iter().map(|f| {
+                    let field_ty = &f.ty;
+                    quote! {
+                        <#field_ty as senax_encoder::Decoder>::unpack(reader)?
+                    }
+                });
+                quote! {
+                    Ok(#name(
+                        #(#field_decode),*
+                    ))
+                }
+            }
+            Fields::Unit => quote! {
+                Ok(#name)
+            },
+        },
+        Data::Enum(e) => {
+            let mut unit_variant_arms_unpack = Vec::new();
+            let mut named_variant_arms_unpack = Vec::new();
+            let mut unnamed_variant_arms_unpack = Vec::new();
+            let mut used_ids_enum_unpack = HashMap::new();
+
+            for v in &e.variants {
+                let variant_name_str = v.ident.to_string();
+                let variant_attrs = get_field_attributes(&v.attrs, &variant_name_str);
+                let variant_id = variant_attrs.id;
+
+                if let Some(dup_variant) =
+                    used_ids_enum_unpack.insert(variant_id, variant_name_str.clone())
+                {
+                    panic!("Variant ID (0x{:016X}) is duplicated for enum '{}'. Please specify a different ID for variant '{}' and '{}' using #[senax(id=...)].", 
+                          variant_id, name, dup_variant, variant_name_str);
+                }
+
+                let variant_ident = &v.ident;
+                match &v.fields {
+                    Fields::Named(fields) => {
+                        let field_idents: Vec<_> = fields
+                            .named
+                            .iter()
+                            .map(|f| f.ident.as_ref().unwrap().clone())
+                            .collect();
+                        let field_types: Vec<_> =
+                            fields.named.iter().map(|f| f.ty.clone()).collect();
+
+                        // For unpack, decode fields in order without expecting field IDs
+                        let field_assignments =
+                            field_idents
+                                .iter()
+                                .zip(field_types.iter())
+                                .map(|(ident, ty)| {
+                                    quote! {
+                                        #ident: <#ty as senax_encoder::Decoder>::unpack(reader)?,
+                                    }
+                                });
+
+                        named_variant_arms_unpack.push(quote! {
+                            x if x == #variant_id => {
+                                Ok(#name::#variant_ident { #(#field_assignments)* })
+                            }
+                        });
+                    }
+                    Fields::Unnamed(fields) => {
+                        let field_types: Vec<_> = fields.unnamed.iter().map(|f| &f.ty).collect();
+                        unnamed_variant_arms_unpack.push(quote! {
+                            x if x == #variant_id => {
+                                Ok(#name::#variant_ident(
+                                    #(
+                                        <#field_types as senax_encoder::Decoder>::unpack(reader)?,
+                                    )*
+                                ))
+                            }
+                        });
+                    }
+                    Fields::Unit => {
+                        unit_variant_arms_unpack.push(quote! {
+                            x if x == #variant_id => {
+                                Ok(#name::#variant_ident)
+                            }
+                        });
+                    }
+                }
+            }
+            quote! {
+                if reader.remaining() == 0 {
+                    return Err(senax_encoder::EncoderError::InsufficientData);
+                }
+                let tag = reader.get_u8();
+                match tag {
+                    senax_encoder::core::TAG_ENUM => {
+                        let variant_id = senax_encoder::core::read_field_id_optimized(reader)?;
+                        match variant_id {
+                            #(#unit_variant_arms_unpack)*
+                            _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown unit variant ID: 0x{:016X} for enum {}", variant_id, stringify!(#name))))
+                        }
+                    }
+                    senax_encoder::core::TAG_ENUM_NAMED => {
+                        let variant_id = senax_encoder::core::read_field_id_optimized(reader)?;
+                        match variant_id {
+                            #(#named_variant_arms_unpack)*
+                            _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown named variant ID: 0x{:016X} for enum {}", variant_id, stringify!(#name))))
+                        }
+                    }
+                    senax_encoder::core::TAG_ENUM_UNNAMED => {
+                        let variant_id = senax_encoder::core::read_field_id_optimized(reader)?;
+                        match variant_id {
+                             #(#unnamed_variant_arms_unpack)*
+                            _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown unnamed variant ID: 0x{:016X} for enum {}", variant_id, stringify!(#name))))
+                        }
+                    }
+                    unknown_tag => Err(senax_encoder::EncoderError::Decode(format!("Unknown enum tag: {} for enum {}", unknown_tag, stringify!(#name))))
+                }
+            }
+        }
+        Data::Union(_) => unimplemented!("Unions are not supported"),
+    };
+
     TokenStream::from(quote! {
         impl #impl_generics senax_encoder::Decoder for #name #ty_generics #where_clause {
             fn decode(reader: &mut bytes::Bytes) -> senax_encoder::Result<Self> {
                 use bytes::{Buf, BufMut};
                 #decode_fields
+            }
+
+            fn unpack(reader: &mut bytes::Bytes) -> senax_encoder::Result<Self> {
+                use bytes::{Buf, BufMut};
+                #unpack_fields
             }
         }
     })

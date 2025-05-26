@@ -146,11 +146,31 @@ pub fn encode<T: Encoder>(value: &T) -> Result<Bytes> {
 /// # Errors
 /// Returns `EncoderError` if the value cannot be encoded.
 pub trait Encoder {
-    /// Encode the value into the given buffer.
+    /// Encode the value into the given buffer with schema evolution support.
+    ///
+    /// This method includes field IDs and type tags for forward/backward compatibility.
+    /// Use this when you need schema evolution support.
     ///
     /// # Arguments
     /// * `writer` - The buffer to write the encoded bytes into.
     fn encode(&self, writer: &mut BytesMut) -> Result<()>;
+
+    /// Pack the value into the given buffer without schema evolution support.
+    ///
+    /// This method omits field IDs and some type tags for compact encoding.
+    /// Fields are encoded in declaration order. Use this when you need
+    /// maximum performance and compact size, but don't need schema evolution.
+    ///
+    /// # Arguments
+    /// * `writer` - The buffer to write the packed bytes into.
+    ///
+    /// # Note
+    /// - For structs: Field IDs are omitted, fields are encoded in declaration order
+    /// - For enums: Variant IDs are still included, but field IDs within variants are omitted
+    /// - For primitives: Some type tags may be omitted for maximum compactness
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+        self.encode(writer)
+    }
 
     /// Returns true if this value equals its default value.
     /// Used by `#[senax(skip_default)]` attribute to skip encoding default values.
@@ -165,9 +185,87 @@ pub trait Encoder {
 /// # Errors
 /// Returns `EncoderError` if the value cannot be decoded or the data is invalid.
 pub trait Decoder: Sized {
-    /// Decode the value from the given buffer.
+    /// Decode the value from the given buffer with schema evolution support.
+    ///
+    /// This method expects field IDs and type tags for forward/backward compatibility.
+    /// Use this when you need schema evolution support.
     ///
     /// # Arguments
     /// * `reader` - The buffer to read the encoded bytes from.
     fn decode(reader: &mut Bytes) -> Result<Self>;
+
+    /// Unpack the value from the given buffer without schema evolution support.
+    ///
+    /// This method expects data packed without field IDs and some type tags.
+    /// Fields are decoded in declaration order. Use this when you need
+    /// maximum performance and the data was packed with `pack()`.
+    ///
+    /// # Arguments
+    /// * `reader` - The buffer to read the packed bytes from.
+    ///
+    /// # Note
+    /// - For structs: Field IDs are not expected, fields are decoded in declaration order
+    /// - For enums: Variant IDs are still expected, but field IDs within variants are not
+    /// - For primitives: Some type tags may be omitted, with relaxed validation
+    fn unpack(reader: &mut Bytes) -> Result<Self> {
+        Self::decode(reader)
+    }
+}
+
+/// Convenience function to pack a value to bytes.
+///
+/// This is equivalent to calling `value.pack(writer)` but provides a more ergonomic API.
+/// Unlike `encode`, this does not store field IDs and is not schema-evolution-friendly.
+///
+/// # Arguments
+/// * `value` - The value to pack.
+///
+/// # Example
+/// ```rust
+/// use senax_encoder::{pack, unpack, Encode, Decode};
+/// use bytes::BytesMut;
+///
+/// #[derive(Encode, Decode, PartialEq, Debug)]
+/// struct MyStruct {
+///     id: u32,
+///     name: String,
+/// }
+///
+/// let value = MyStruct { id: 42, name: "hello".to_string() };
+/// let mut buf = pack(&value).unwrap();
+/// let decoded: MyStruct = unpack(&mut buf).unwrap();
+/// assert_eq!(value, decoded);
+/// ```
+pub fn pack<T: Encoder>(value: &T) -> Result<Bytes> {
+    let mut writer = BytesMut::new();
+    value.pack(&mut writer)?;
+    Ok(writer.freeze())
+}
+
+/// Convenience function to unpack a value from bytes.
+///
+/// This is equivalent to calling `T::unpack(reader)` but provides a more ergonomic API.
+/// Unlike `decode`, this does not expect field IDs and is not schema-evolution-friendly.
+///
+/// # Arguments
+/// * `reader` - The buffer to read the packed bytes from.
+///
+/// # Example
+/// ```rust
+/// use senax_encoder::{pack, unpack, Encode, Decode};
+/// use bytes::BytesMut;
+///
+/// #[derive(Encode, Decode, PartialEq, Debug)]
+/// struct MyStruct {
+///     id: u32,
+///     name: String,
+/// }
+///
+/// let value = MyStruct { id: 42, name: "hello".to_string() };
+/// let mut buf = pack(&value).unwrap();
+/// let decoded: MyStruct = unpack(&mut buf).unwrap();
+/// assert_eq!(value, decoded);
+/// ```
+pub fn unpack<T: Decoder>(reader: &mut Bytes) -> Result<T> {
+    T::unpack(reader)
 }

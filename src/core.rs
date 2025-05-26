@@ -99,6 +99,18 @@ impl Decoder for bool {
             ))),
         }
     }
+
+    /// Unpacks a `bool` from a single byte with relaxed validation.
+    ///
+    /// 0 is interpreted as `false`, any non-zero value is interpreted as `true`.
+    /// No error checking is performed for invalid values.
+    fn unpack(reader: &mut Bytes) -> Result<Self> {
+        if reader.remaining() == 0 {
+            return Err(EncoderError::InsufficientData);
+        }
+        let value = reader.get_u8();
+        Ok(value != TAG_ZERO)
+    }
 }
 
 // --- Common decode functions ---
@@ -705,6 +717,12 @@ impl Encoder for f32 {
         Ok(())
     }
 
+    /// Packs an `f32` as 4 bytes (little-endian IEEE 754) without a type tag.
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+        writer.put_f32_le(*self);
+        Ok(())
+    }
+
     fn is_default(&self) -> bool {
         *self == 0.0
     }
@@ -737,11 +755,27 @@ impl Decoder for f32 {
             )))
         }
     }
+
+    /// Unpacks an `f32` from 4 bytes (little-endian IEEE 754) without expecting a type tag.
+    fn unpack(reader: &mut Bytes) -> Result<Self> {
+        if reader.remaining() < 4 {
+            return Err(EncoderError::InsufficientData);
+        }
+        let mut bytes = [0u8; 4];
+        reader.copy_to_slice(&mut bytes);
+        Ok(f32::from_le_bytes(bytes))
+    }
 }
 /// Encodes an `f64` as a tag and 8 bytes (little-endian IEEE 754).
 impl Encoder for f64 {
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_F64);
+        writer.put_f64_le(*self);
+        Ok(())
+    }
+
+    /// Packs an `f64` as 8 bytes (little-endian IEEE 754) without a type tag.
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_f64_le(*self);
         Ok(())
     }
@@ -770,6 +804,16 @@ impl Decoder for f64 {
                 TAG_F64, tag
             )))
         }
+    }
+
+    /// Unpacks an `f64` from 8 bytes (little-endian IEEE 754) without expecting a type tag.
+    fn unpack(reader: &mut Bytes) -> Result<Self> {
+        if reader.remaining() < 8 {
+            return Err(EncoderError::InsufficientData);
+        }
+        let mut bytes = [0u8; 8];
+        reader.copy_to_slice(&mut bytes);
+        Ok(f64::from_le_bytes(bytes))
     }
 }
 
@@ -1485,12 +1529,10 @@ impl Decoder for Bytes {
         let tag = reader.get_u8();
         let len = if tag == TAG_BINARY {
             usize::decode(reader)?
-        } else if (TAG_STRING_BASE..=TAG_STRING_LONG).contains(&tag) {
-            if tag < TAG_STRING_LONG {
-                (tag - TAG_STRING_BASE) as usize
-            } else {
-                usize::decode(reader)?
-            }
+        } else if (TAG_STRING_BASE..TAG_STRING_LONG).contains(&tag) {
+            (tag - TAG_STRING_BASE) as usize
+        } else if tag == TAG_STRING_LONG {
+            usize::decode(reader)?
         } else {
             return Err(EncoderError::Decode(format!(
                 "Expected Bytes tag ({} or {}..={}), got {}",

@@ -102,6 +102,15 @@ impl Encoder for DateTime<Utc> {
         Ok(())
     }
 
+    /// Packs a `chrono::DateTime<Utc>` as seconds and nanoseconds without a type tag.
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+        let timestamp_seconds = self.timestamp();
+        let timestamp_nanos = self.timestamp_subsec_nanos();
+        timestamp_seconds.pack(writer)?;
+        timestamp_nanos.pack(writer)?;
+        Ok(())
+    }
+
     fn is_default(&self) -> bool {
         *self == DateTime::<Utc>::default()
     }
@@ -129,6 +138,18 @@ impl Decoder for DateTime<Utc> {
             ))
         })
     }
+
+    /// Unpacks a `chrono::DateTime<Utc>` from seconds and nanoseconds without expecting a type tag.
+    fn unpack(reader: &mut Bytes) -> Result<Self> {
+        let timestamp_seconds = i64::unpack(reader)?;
+        let timestamp_nanos = u32::unpack(reader)?;
+        DateTime::from_timestamp(timestamp_seconds, timestamp_nanos).ok_or_else(|| {
+            EncoderError::Decode(format!(
+                "Invalid timestamp: {} seconds, {} nanos",
+                timestamp_seconds, timestamp_nanos
+            ))
+        })
+    }
 }
 
 // --- DateTime<Local> ---
@@ -141,6 +162,16 @@ impl Encoder for DateTime<Local> {
         let timestamp_nanos = utc_dt.timestamp_subsec_nanos();
         timestamp_seconds.encode(writer)?;
         timestamp_nanos.encode(writer)?;
+        Ok(())
+    }
+
+    /// Packs a `chrono::DateTime<Local>` as seconds and nanoseconds without a type tag.
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+        let utc_dt = self.with_timezone(&Utc);
+        let timestamp_seconds = utc_dt.timestamp();
+        let timestamp_nanos = utc_dt.timestamp_subsec_nanos();
+        timestamp_seconds.pack(writer)?;
+        timestamp_nanos.pack(writer)?;
         Ok(())
     }
 
@@ -163,6 +194,20 @@ impl Decoder for DateTime<Local> {
         }
         let timestamp_seconds = i64::decode(reader)?;
         let timestamp_nanos = u32::decode(reader)?;
+        let utc_dt =
+            DateTime::from_timestamp(timestamp_seconds, timestamp_nanos).ok_or_else(|| {
+                EncoderError::Decode(format!(
+                    "Invalid timestamp: {} seconds, {} nanos",
+                    timestamp_seconds, timestamp_nanos
+                ))
+            })?;
+        Ok(utc_dt.with_timezone(&Local))
+    }
+
+    /// Unpacks a `chrono::DateTime<Local>` from seconds and nanoseconds without expecting a type tag.
+    fn unpack(reader: &mut Bytes) -> Result<Self> {
+        let timestamp_seconds = i64::unpack(reader)?;
+        let timestamp_nanos = u32::unpack(reader)?;
         let utc_dt =
             DateTime::from_timestamp(timestamp_seconds, timestamp_nanos).ok_or_else(|| {
                 EncoderError::Decode(format!(
