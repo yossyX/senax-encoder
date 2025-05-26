@@ -1,3 +1,5 @@
+#![cfg(feature = "pack")]
+
 use bytes::BufMut;
 use senax_encoder::{encode, pack, unpack, Decode, Encode};
 use std::collections::HashMap;

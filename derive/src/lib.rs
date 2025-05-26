@@ -520,6 +520,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
     };
 
     // Generate pack implementation for structs and enums (no field IDs for struct fields)
+    #[cfg(feature = "pack")]
     let pack_fields = match &input.data {
         Data::Struct(s) => match &s.fields {
             Fields::Named(fields) => {
@@ -633,6 +634,18 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
         _ => quote! { false },
     };
 
+    #[cfg(feature = "pack")]
+    let pack_method = quote! {
+        fn pack(&self, writer: &mut bytes::BytesMut) -> senax_encoder::Result<()> {
+            use bytes::{Buf, BufMut};
+            #pack_fields
+            Ok(())
+        }
+    };
+
+    #[cfg(not(feature = "pack"))]
+    let pack_method = quote! {};
+
     TokenStream::from(quote! {
         impl #impl_generics senax_encoder::Encoder for #name #ty_generics #where_clause {
             fn encode(&self, writer: &mut bytes::BytesMut) -> senax_encoder::Result<()> {
@@ -641,11 +654,7 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                 Ok(())
             }
 
-            fn pack(&self, writer: &mut bytes::BytesMut) -> senax_encoder::Result<()> {
-                use bytes::{Buf, BufMut};
-                #pack_fields
-                Ok(())
-            }
+            #pack_method
 
             fn is_default(&self) -> bool {
                 #is_default_impl
@@ -1028,6 +1037,7 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
     };
 
     // Generate unpack implementation for structs and enums (no field IDs for struct fields)
+    #[cfg(feature = "pack")]
     let unpack_fields = match &input.data {
         Data::Struct(s) => match &s.fields {
             Fields::Named(fields) => {
@@ -1162,6 +1172,17 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
         Data::Union(_) => unimplemented!("Unions are not supported"),
     };
 
+    #[cfg(feature = "pack")]
+    let unpack_method = quote! {
+        fn unpack(reader: &mut bytes::Bytes) -> senax_encoder::Result<Self> {
+            use bytes::{Buf, BufMut};
+            #unpack_fields
+        }
+    };
+
+    #[cfg(not(feature = "pack"))]
+    let unpack_method = quote! {};
+
     TokenStream::from(quote! {
         impl #impl_generics senax_encoder::Decoder for #name #ty_generics #where_clause {
             fn decode(reader: &mut bytes::Bytes) -> senax_encoder::Result<Self> {
@@ -1169,10 +1190,7 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                 #decode_fields
             }
 
-            fn unpack(reader: &mut bytes::Bytes) -> senax_encoder::Result<Self> {
-                use bytes::{Buf, BufMut};
-                #unpack_fields
-            }
+            #unpack_method
         }
     })
 }

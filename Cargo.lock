@@ -548,7 +548,7 @@ checksum = "1c107b6f4780854c8b126e228ea8869f4d7b71260f962fefb57b996b8959ba6b"
 
 [[package]]
 name = "senax-encoder"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "ahash 0.8.12",
  "bytes",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "senax-encoder-derive"
-version = "0.1.14"
+version = "0.1.15"
 dependencies = [
  "crc",
  "itertools",

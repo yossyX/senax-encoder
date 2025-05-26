@@ -168,6 +168,7 @@ pub trait Encoder {
     /// - For structs: Field IDs are omitted, fields are encoded in declaration order
     /// - For enums: Variant IDs are still included, but field IDs within variants are omitted
     /// - For primitives: Some type tags may be omitted for maximum compactness
+    #[cfg(feature = "pack")]
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         self.encode(writer)
     }
@@ -207,6 +208,7 @@ pub trait Decoder: Sized {
     /// - For structs: Field IDs are not expected, fields are decoded in declaration order
     /// - For enums: Variant IDs are still expected, but field IDs within variants are not
     /// - For primitives: Some type tags may be omitted, with relaxed validation
+    #[cfg(feature = "pack")]
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         Self::decode(reader)
     }
@@ -236,6 +238,7 @@ pub trait Decoder: Sized {
 /// let decoded: MyStruct = unpack(&mut buf).unwrap();
 /// assert_eq!(value, decoded);
 /// ```
+#[cfg(feature = "pack")]
 pub fn pack<T: Encoder>(value: &T) -> Result<Bytes> {
     let mut writer = BytesMut::new();
     value.pack(&mut writer)?;
@@ -266,6 +269,7 @@ pub fn pack<T: Encoder>(value: &T) -> Result<Bytes> {
 /// let decoded: MyStruct = unpack(&mut buf).unwrap();
 /// assert_eq!(value, decoded);
 /// ```
+#[cfg(feature = "pack")]
 pub fn unpack<T: Decoder>(reader: &mut Bytes) -> Result<T> {
     T::unpack(reader)
 }

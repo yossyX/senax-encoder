@@ -104,6 +104,7 @@ impl Decoder for bool {
     ///
     /// 0 is interpreted as `false`, any non-zero value is interpreted as `true`.
     /// No error checking is performed for invalid values.
+    #[cfg(feature = "pack")]
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -718,6 +719,7 @@ impl Encoder for f32 {
     }
 
     /// Packs an `f32` as 4 bytes (little-endian IEEE 754) without a type tag.
+    #[cfg(feature = "pack")]
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_f32_le(*self);
         Ok(())
@@ -757,6 +759,7 @@ impl Decoder for f32 {
     }
 
     /// Unpacks an `f32` from 4 bytes (little-endian IEEE 754) without expecting a type tag.
+    #[cfg(feature = "pack")]
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() < 4 {
             return Err(EncoderError::InsufficientData);
@@ -775,6 +778,7 @@ impl Encoder for f64 {
     }
 
     /// Packs an `f64` as 8 bytes (little-endian IEEE 754) without a type tag.
+    #[cfg(feature = "pack")]
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_f64_le(*self);
         Ok(())
@@ -807,6 +811,7 @@ impl Decoder for f64 {
     }
 
     /// Unpacks an `f64` from 8 bytes (little-endian IEEE 754) without expecting a type tag.
+    #[cfg(feature = "pack")]
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() < 8 {
             return Err(EncoderError::InsufficientData);
