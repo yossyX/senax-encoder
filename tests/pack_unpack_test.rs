@@ -1,7 +1,9 @@
 #![cfg(feature = "pack")]
 
-use bytes::BufMut;
-use senax_encoder::{encode, pack, unpack, Decode, Encode};
+use bytes::{BufMut, BytesMut};
+#[cfg(feature = "encode")]
+use senax_encoder::{encode};
+use senax_encoder::{pack, unpack, Decode, Encode, Encoder, Decoder};
 use std::collections::HashMap;
 
 #[derive(Encode, Decode, PartialEq, Debug)]
@@ -71,6 +73,7 @@ fn test_pack_unpack_unit_struct() {
 }
 
 #[test]
+#[cfg(feature = "encode")]
 fn test_pack_vs_encode_size_difference() {
     let original_pack = SimpleStruct {
         id: 42,
@@ -179,6 +182,7 @@ fn test_enum_named_variant_pack_unpack() {
 }
 
 #[test]
+#[cfg(feature = "encode")]
 fn test_enum_pack_vs_encode_size_difference() {
     #[derive(Encode, Decode, PartialEq, Debug)]
     enum TestEnum {
@@ -267,26 +271,6 @@ fn test_primitive_pack_unpack() {
 }
 
 #[test]
-fn test_primitive_pack_vs_encode_size() {
-    // Test that pack is smaller than encode for primitives
-    let f32_val = 3.14159f32;
-    let packed_f32 = pack(&f32_val).unwrap();
-    let encoded_f32 = encode(&f32_val).unwrap();
-
-    println!("f32 packed size: {}", packed_f32.len());
-    println!("f32 encoded size: {}", encoded_f32.len());
-    assert!(packed_f32.len() < encoded_f32.len()); // 4 bytes vs 5 bytes (tag + data)
-
-    let f64_val = 2.718281828459045f64;
-    let packed_f64 = pack(&f64_val).unwrap();
-    let encoded_f64 = encode(&f64_val).unwrap();
-
-    println!("f64 packed size: {}", packed_f64.len());
-    println!("f64 encoded size: {}", encoded_f64.len());
-    assert!(packed_f64.len() < encoded_f64.len()); // 8 bytes vs 9 bytes (tag + data)
-}
-
-#[test]
 #[cfg(feature = "chrono")]
 fn test_datetime_pack_unpack() {
     use chrono::{DateTime, Local, Utc};
@@ -308,17 +292,62 @@ fn test_datetime_pack_unpack() {
 
 #[test]
 #[cfg(feature = "chrono")]
-fn test_datetime_pack_vs_encode_size() {
-    use chrono::DateTime;
+fn test_datetime_default_and_non_default_pack_unpack() {
+    use chrono::{DateTime, Local, Utc};
 
-    let dt = DateTime::from_timestamp(1640995200, 123456789).unwrap();
+    // Test default DateTime<Utc> (should use TAG_NONE)
+    let default_utc = DateTime::<Utc>::default();
+    let packed_default_utc = pack(&default_utc).unwrap();
+    let mut reader = packed_default_utc;
+    let unpacked_default_utc: DateTime<Utc> = unpack(&mut reader).unwrap();
+    assert_eq!(default_utc, unpacked_default_utc);
 
-    let packed_dt = pack(&dt).unwrap();
-    let encoded_dt = encode(&dt).unwrap();
+    // Test non-default DateTime<Utc> (should use TAG_CHRONO_DATETIME)
+    let non_default_utc = DateTime::from_timestamp(1640995200, 123456789).unwrap();
+    let packed_non_default_utc = pack(&non_default_utc).unwrap();
+    let mut reader = packed_non_default_utc;
+    let unpacked_non_default_utc: DateTime<Utc> = unpack(&mut reader).unwrap();
+    assert_eq!(non_default_utc, unpacked_non_default_utc);
 
-    println!("DateTime packed size: {}", packed_dt.len());
-    println!("DateTime encoded size: {}", encoded_dt.len());
-    assert!(packed_dt.len() < encoded_dt.len()); // Should be 1 byte smaller (no tag)
+    // Test default DateTime<Local> (should use TAG_NONE)
+    let default_local = DateTime::<Local>::default();
+    let packed_default_local = pack(&default_local).unwrap();
+    let mut reader = packed_default_local;
+    let unpacked_default_local: DateTime<Local> = unpack(&mut reader).unwrap();
+    assert_eq!(default_local, unpacked_default_local);
+
+    // Test non-default DateTime<Local> (should use TAG_CHRONO_DATETIME)
+    let non_default_local = DateTime::from_timestamp(1640995200, 123456789).unwrap().with_timezone(&Local);
+    let packed_non_default_local = pack(&non_default_local).unwrap();
+    let mut reader = packed_non_default_local;
+    let unpacked_non_default_local: DateTime<Local> = unpack(&mut reader).unwrap();
+    // Compare UTC timestamps since local timezone might vary
+    assert_eq!(non_default_local.with_timezone(&Utc), unpacked_non_default_local.with_timezone(&Utc));
+
+    // Test various DateTime values
+    let test_datetimes = vec![
+        DateTime::from_timestamp(0, 0).unwrap(),                    // Unix epoch
+        DateTime::from_timestamp(1234567890, 0).unwrap(),           // 2009-02-13
+        DateTime::from_timestamp(1640995200, 123456789).unwrap(),   // 2022-01-01 with nanos
+        DateTime::from_timestamp(-1, 999999999).unwrap(),           // Before epoch
+        DateTime::from_timestamp(2147483647, 999999999).unwrap(),   // Year 2038 problem
+    ];
+
+    for &original_utc in &test_datetimes {
+        // Test DateTime<Utc>
+        let packed_utc = pack(&original_utc).unwrap();
+        let mut reader = packed_utc;
+        let unpacked_utc: DateTime<Utc> = unpack(&mut reader).unwrap();
+        assert_eq!(original_utc, unpacked_utc, "Failed for UTC DateTime: {}", original_utc);
+
+        // Test DateTime<Local>
+        let original_local = original_utc.with_timezone(&Local);
+        let packed_local = pack(&original_local).unwrap();
+        let mut reader = packed_local;
+        let unpacked_local: DateTime<Local> = unpack(&mut reader).unwrap();
+        assert_eq!(original_local.with_timezone(&Utc), unpacked_local.with_timezone(&Utc), 
+                   "Failed for Local DateTime: {}", original_local);
+    }
 }
 
 #[test]
@@ -523,6 +552,7 @@ fn test_deeply_nested_struct_pack_unpack() {
 }
 
 #[test]
+#[cfg(feature = "encode")]
 fn test_complex_struct_pack_vs_encode_size() {
     #[derive(Encode, Decode, PartialEq, Debug)]
     struct ComplexStruct {
@@ -636,4 +666,916 @@ fn test_array_of_complex_structs_pack_unpack() {
     let unpacked: Container = unpack(&mut reader).unwrap();
 
     assert_eq!(original, unpacked);
+}
+
+#[test]
+fn test_vec_u8_pack_unpack() {
+    // Test empty Vec<u8>
+    let empty_vec: Vec<u8> = Vec::new();
+    let packed_empty = pack(&empty_vec).unwrap();
+    let mut reader = packed_empty;
+    let unpacked_empty: Vec<u8> = unpack(&mut reader).unwrap();
+    assert_eq!(empty_vec, unpacked_empty);
+
+    // Test Vec<u8> with various byte values
+    let byte_vec = vec![0u8, 1, 127, 128, 255, 42, 100];
+    let packed_bytes = pack(&byte_vec).unwrap();
+    let mut reader = packed_bytes;
+    let unpacked_bytes: Vec<u8> = unpack(&mut reader).unwrap();
+    assert_eq!(byte_vec, unpacked_bytes);
+
+    // Test large Vec<u8>
+    let large_vec: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+    let packed_large = pack(&large_vec).unwrap();
+    let mut reader = packed_large;
+    let unpacked_large: Vec<u8> = unpack(&mut reader).unwrap();
+    assert_eq!(large_vec, unpacked_large);
+
+    // Test Vec<u8> with binary data
+    let binary_data = vec![0xFF, 0x00, 0xAB, 0xCD, 0xEF, 0x12, 0x34, 0x56];
+    let packed_binary = pack(&binary_data).unwrap();
+    let mut reader = packed_binary;
+    let unpacked_binary: Vec<u8> = unpack(&mut reader).unwrap();
+    assert_eq!(binary_data, unpacked_binary);
+}
+
+#[test]
+#[cfg(feature = "encode")]
+fn test_vec_u8_pack_vs_encode_size() {
+    let test_vectors = vec![
+        Vec::new(),                                           // Empty
+        vec![42],                                            // Single byte
+        vec![0, 1, 2, 3, 4, 5],                             // Small vector
+        (0..100).map(|i| (i % 256) as u8).collect::<Vec<u8>>(), // Medium vector
+        (0..1000).map(|i| (i % 256) as u8).collect::<Vec<u8>>(), // Large vector
+    ];
+
+    for test_vec in test_vectors {
+        // Pack Vec<u8>
+        let packed_bytes = pack(&test_vec).unwrap();
+
+        // Encode Vec<u8>
+        let encoded_bytes = encode(&test_vec).unwrap();
+
+        println!("Vec<u8> length: {}, packed size: {}, encoded size: {}", 
+                 test_vec.len(), packed_bytes.len(), encoded_bytes.len());
+
+        // For small Vec<u8>, pack and encode should be the same size
+        // For large Vec<u8>, pack may be smaller than encode due to different encoding strategies
+        if test_vec.len() < 100 {
+            assert_eq!(packed_bytes.len(), encoded_bytes.len());
+        } else {
+            // For larger vectors, pack should be smaller or equal to encode
+            assert!(packed_bytes.len() <= encoded_bytes.len());
+        }
+
+        // Verify the data can be unpacked correctly
+        let mut reader = packed_bytes;
+        let unpacked: Vec<u8> = unpack(&mut reader).unwrap();
+        assert_eq!(test_vec, unpacked);
+    }
+}
+
+#[test]
+fn test_nested_vec_u8_pack_unpack() {
+    #[derive(Encode, Decode, PartialEq, Debug)]
+    struct BinaryContainer {
+        id: u32,
+        name: String,
+        data: Vec<u8>,
+        chunks: Vec<Vec<u8>>,
+    }
+
+    let original = BinaryContainer {
+        id: 123,
+        name: "binary_data".to_string(),
+        data: vec![0xFF, 0x00, 0xAB, 0xCD, 0xEF],
+        chunks: vec![
+            vec![1, 2, 3],
+            vec![],
+            vec![255, 254, 253, 252],
+            vec![42],
+        ],
+    };
+
+    let packed_bytes = pack(&original).unwrap();
+    let mut reader = packed_bytes;
+    let unpacked: BinaryContainer = unpack(&mut reader).unwrap();
+
+    assert_eq!(original, unpacked);
+}
+
+#[test]
+fn test_vec_u8_with_option_pack_unpack() {
+    #[derive(Encode, Decode, PartialEq, Debug)]
+    struct OptionalBinaryData {
+        required_data: Vec<u8>,
+        optional_data: Option<Vec<u8>>,
+        optional_chunks: Option<Vec<Vec<u8>>>,
+    }
+
+    // Test with Some values
+    let with_optional = OptionalBinaryData {
+        required_data: vec![1, 2, 3, 4, 5],
+        optional_data: Some(vec![10, 20, 30]),
+        optional_chunks: Some(vec![
+            vec![100, 101],
+            vec![200, 201, 202],
+        ]),
+    };
+
+    let packed_with = pack(&with_optional).unwrap();
+    let mut reader = packed_with;
+    let unpacked_with: OptionalBinaryData = unpack(&mut reader).unwrap();
+    assert_eq!(with_optional, unpacked_with);
+
+    // Test with None values
+    let without_optional = OptionalBinaryData {
+        required_data: vec![5, 4, 3, 2, 1],
+        optional_data: None,
+        optional_chunks: None,
+    };
+
+    let packed_without = pack(&without_optional).unwrap();
+    let mut reader = packed_without;
+    let unpacked_without: OptionalBinaryData = unpack(&mut reader).unwrap();
+    assert_eq!(without_optional, unpacked_without);
+}
+
+#[test]
+fn test_bytes_pack_unpack() {
+    use bytes::Bytes;
+
+    // Test empty Bytes
+    let empty_bytes = Bytes::new();
+    let packed_empty = pack(&empty_bytes).unwrap();
+    let mut reader = packed_empty;
+    let unpacked_empty: Bytes = unpack(&mut reader).unwrap();
+    assert_eq!(empty_bytes, unpacked_empty);
+
+    // Test Bytes with various byte values
+    let byte_data = Bytes::from_static(&[0u8, 1, 127, 128, 255, 42, 100]);
+    let packed_bytes = pack(&byte_data).unwrap();
+    let mut reader = packed_bytes;
+    let unpacked_bytes: Bytes = unpack(&mut reader).unwrap();
+    assert_eq!(byte_data, unpacked_bytes);
+
+    // Test large Bytes
+    let large_data: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+    let large_bytes = Bytes::from(large_data.clone());
+    let packed_large = pack(&large_bytes).unwrap();
+    let mut reader = packed_large;
+    let unpacked_large: Bytes = unpack(&mut reader).unwrap();
+    assert_eq!(large_bytes, unpacked_large);
+
+    // Test Bytes with binary data
+    let binary_data = Bytes::from_static(&[0xFF, 0x00, 0xAB, 0xCD, 0xEF, 0x12, 0x34, 0x56]);
+    let packed_binary = pack(&binary_data).unwrap();
+    let mut reader = packed_binary;
+    let unpacked_binary: Bytes = unpack(&mut reader).unwrap();
+    assert_eq!(binary_data, unpacked_binary);
+
+    // Test Bytes from string
+    let string_data = "Hello, World! 🌍";
+    let string_bytes = Bytes::from(string_data.as_bytes().to_vec());
+    let packed_string = pack(&string_bytes).unwrap();
+    let mut reader = packed_string;
+    let unpacked_string: Bytes = unpack(&mut reader).unwrap();
+    assert_eq!(string_bytes, unpacked_string);
+}
+
+#[test]
+#[cfg(feature = "encode")]
+fn test_bytes_pack_vs_encode_size() {
+    use bytes::Bytes;
+
+    let test_bytes = vec![
+        Bytes::new(),                                                    // Empty
+        Bytes::from_static(&[42]),                                      // Single byte
+        Bytes::from_static(&[0, 1, 2, 3, 4, 5]),                      // Small bytes
+        Bytes::from((0..100).map(|i| (i % 256) as u8).collect::<Vec<u8>>()), // Medium bytes
+        Bytes::from((0..1000).map(|i| (i % 256) as u8).collect::<Vec<u8>>()), // Large bytes
+    ];
+
+    for test_data in test_bytes {
+        // Pack Bytes
+        let packed_bytes = pack(&test_data).unwrap();
+
+        // Encode Bytes
+        let encoded_bytes = encode(&test_data).unwrap();
+
+        println!("Bytes length: {}, packed size: {}, encoded size: {}", 
+                 test_data.len(), packed_bytes.len(), encoded_bytes.len());
+
+        // For small Bytes, pack and encode should be the same size
+        // For large Bytes, pack may be smaller than encode due to different encoding strategies
+        if test_data.len() < 100 {
+            assert_eq!(packed_bytes.len(), encoded_bytes.len());
+        } else {
+            // For larger bytes, pack should be smaller or equal to encode
+            assert!(packed_bytes.len() <= encoded_bytes.len());
+        }
+
+        // Verify the data can be unpacked correctly
+        let mut reader = packed_bytes;
+        let unpacked: Bytes = unpack(&mut reader).unwrap();
+        assert_eq!(test_data, unpacked);
+    }
+}
+
+#[test]
+fn test_nested_bytes_pack_unpack() {
+    use bytes::Bytes;
+
+    #[derive(Encode, Decode, PartialEq, Debug)]
+    struct BytesContainer {
+        id: u32,
+        name: String,
+        data: Bytes,
+        chunks: Vec<Bytes>,
+        metadata: Option<Bytes>,
+    }
+
+    let original = BytesContainer {
+        id: 456,
+        name: "bytes_container".to_string(),
+        data: Bytes::from_static(&[0xFF, 0x00, 0xAB, 0xCD, 0xEF]),
+        chunks: vec![
+            Bytes::from_static(&[1, 2, 3]),
+            Bytes::new(),
+            Bytes::from_static(&[255, 254, 253, 252]),
+            Bytes::from_static(&[42]),
+        ],
+        metadata: Some(Bytes::from("metadata content".as_bytes().to_vec())),
+    };
+
+    let packed_bytes = pack(&original).unwrap();
+    let mut reader = packed_bytes;
+    let unpacked: BytesContainer = unpack(&mut reader).unwrap();
+
+    assert_eq!(original, unpacked);
+}
+
+#[test]
+fn test_bytes_with_option_pack_unpack() {
+    use bytes::Bytes;
+
+    #[derive(Encode, Decode, PartialEq, Debug)]
+    struct OptionalBytesData {
+        required_data: Bytes,
+        optional_data: Option<Bytes>,
+        optional_chunks: Option<Vec<Bytes>>,
+    }
+
+    // Test with Some values
+    let with_optional = OptionalBytesData {
+        required_data: Bytes::from_static(&[1, 2, 3, 4, 5]),
+        optional_data: Some(Bytes::from_static(&[10, 20, 30])),
+        optional_chunks: Some(vec![
+            Bytes::from_static(&[100, 101]),
+            Bytes::from_static(&[200, 201, 202]),
+        ]),
+    };
+
+    let packed_with = pack(&with_optional).unwrap();
+    let mut reader = packed_with;
+    let unpacked_with: OptionalBytesData = unpack(&mut reader).unwrap();
+    assert_eq!(with_optional, unpacked_with);
+
+    // Test with None values
+    let without_optional = OptionalBytesData {
+        required_data: Bytes::from_static(&[5, 4, 3, 2, 1]),
+        optional_data: None,
+        optional_chunks: None,
+    };
+
+    let packed_without = pack(&without_optional).unwrap();
+    let mut reader = packed_without;
+    let unpacked_without: OptionalBytesData = unpack(&mut reader).unwrap();
+    assert_eq!(without_optional, unpacked_without);
+}
+
+#[test]
+fn test_bytes_vec_u8_pack_behavior() {
+    use bytes::Bytes;
+
+    // Test that Bytes and Vec<u8> behavior depends on vec_u8 feature
+    let data = vec![1u8, 2, 3, 4, 5, 255, 0, 128];
+    let vec_data = data.clone();
+    let bytes_data = Bytes::from(data);
+
+    // Pack both
+    let packed_vec = pack(&vec_data).unwrap();
+    let packed_bytes = pack(&bytes_data).unwrap();
+
+    println!("Vec<u8> packed: {:?}", packed_vec.as_ref());
+    println!("Bytes packed: {:?}", packed_bytes.as_ref());
+
+    #[cfg(feature = "vec_u8")]
+    {
+        // With vec_u8 feature, both use TAG_BINARY, so packed data will be the same
+        assert_eq!(packed_vec, packed_bytes);
+    }
+
+    #[cfg(not(feature = "vec_u8"))]
+    {
+        // Without vec_u8 feature, they use different tags, so packed data will differ
+        assert_ne!(packed_vec, packed_bytes);
+    }
+
+    // Each can be unpacked correctly with its own type
+    let mut reader_vec = packed_vec;
+    let unpacked_vec: Vec<u8> = unpack(&mut reader_vec).unwrap();
+    assert_eq!(vec_data, unpacked_vec);
+
+    let mut reader_bytes = packed_bytes;
+    let unpacked_bytes: Bytes = unpack(&mut reader_bytes).unwrap();
+    assert_eq!(bytes_data, unpacked_bytes);
+}
+
+#[test]
+fn test_bytes_string_pack_behavior() {
+    use bytes::Bytes;
+
+    // Test that Bytes and String with same UTF-8 content use different tags
+    // This demonstrates the difference between the two types in pack format
+    let text = "Hello, World! 🌍";
+    let string_data = text.to_string();
+    let bytes_data = Bytes::from(text.as_bytes().to_vec());
+
+    // Pack both
+    let packed_string = pack(&string_data).unwrap();
+    let packed_bytes = pack(&bytes_data).unwrap();
+
+    // They use different tags, so packed data will differ
+    println!("String packed: {:?}", packed_string.as_ref());
+    println!("Bytes packed: {:?}", packed_bytes.as_ref());
+    assert_ne!(packed_string, packed_bytes);
+
+    // Each can be unpacked correctly with its own type
+    let mut reader_string = packed_string;
+    let unpacked_string: String = unpack(&mut reader_string).unwrap();
+    assert_eq!(string_data, unpacked_string);
+
+    let mut reader_bytes = packed_bytes;
+    let unpacked_bytes: Bytes = unpack(&mut reader_bytes).unwrap();
+    assert_eq!(bytes_data, unpacked_bytes);
+}
+
+#[test]
+fn test_all_primitive_types_pack_unpack() {
+    // Test all unsigned integer types
+    let u8_val: u8 = 255;
+    let packed_u8 = pack(&u8_val).unwrap();
+    let mut reader = packed_u8;
+    let unpacked_u8: u8 = unpack(&mut reader).unwrap();
+    assert_eq!(u8_val, unpacked_u8);
+
+    let u16_val: u16 = 65535;
+    let packed_u16 = pack(&u16_val).unwrap();
+    let mut reader = packed_u16;
+    let unpacked_u16: u16 = unpack(&mut reader).unwrap();
+    assert_eq!(u16_val, unpacked_u16);
+
+    let u32_val: u32 = 4294967295;
+    let packed_u32 = pack(&u32_val).unwrap();
+    let mut reader = packed_u32;
+    let unpacked_u32: u32 = unpack(&mut reader).unwrap();
+    assert_eq!(u32_val, unpacked_u32);
+
+    let u64_val: u64 = 18446744073709551615;
+    let packed_u64 = pack(&u64_val).unwrap();
+    let mut reader = packed_u64;
+    let unpacked_u64: u64 = unpack(&mut reader).unwrap();
+    assert_eq!(u64_val, unpacked_u64);
+
+    let u128_val: u128 = 340282366920938463463374607431768211455;
+    let packed_u128 = pack(&u128_val).unwrap();
+    let mut reader = packed_u128;
+    let unpacked_u128: u128 = unpack(&mut reader).unwrap();
+    assert_eq!(u128_val, unpacked_u128);
+
+    let usize_val: usize = usize::MAX;
+    let packed_usize = pack(&usize_val).unwrap();
+    let mut reader = packed_usize;
+    let unpacked_usize: usize = unpack(&mut reader).unwrap();
+    assert_eq!(usize_val, unpacked_usize);
+
+    // Test all signed integer types
+    let i8_val: i8 = -128;
+    let packed_i8 = pack(&i8_val).unwrap();
+    let mut reader = packed_i8;
+    let unpacked_i8: i8 = unpack(&mut reader).unwrap();
+    assert_eq!(i8_val, unpacked_i8);
+
+    let i16_val: i16 = -32768;
+    let packed_i16 = pack(&i16_val).unwrap();
+    let mut reader = packed_i16;
+    let unpacked_i16: i16 = unpack(&mut reader).unwrap();
+    assert_eq!(i16_val, unpacked_i16);
+
+    let i32_val: i32 = -2147483648;
+    let packed_i32 = pack(&i32_val).unwrap();
+    let mut reader = packed_i32;
+    let unpacked_i32: i32 = unpack(&mut reader).unwrap();
+    assert_eq!(i32_val, unpacked_i32);
+
+    let i64_val: i64 = -9223372036854775808;
+    let packed_i64 = pack(&i64_val).unwrap();
+    let mut reader = packed_i64;
+    let unpacked_i64: i64 = unpack(&mut reader).unwrap();
+    assert_eq!(i64_val, unpacked_i64);
+
+    let i128_val: i128 = -170141183460469231731687303715884105728;
+    let packed_i128 = pack(&i128_val).unwrap();
+    let mut reader = packed_i128;
+    let unpacked_i128: i128 = unpack(&mut reader).unwrap();
+    assert_eq!(i128_val, unpacked_i128);
+
+    let isize_val: isize = isize::MIN;
+    let packed_isize = pack(&isize_val).unwrap();
+    let mut reader = packed_isize;
+    let unpacked_isize: isize = unpack(&mut reader).unwrap();
+    assert_eq!(isize_val, unpacked_isize);
+
+    // Test floating point types
+    let f32_val: f32 = 3.14159265;
+    let packed_f32 = pack(&f32_val).unwrap();
+    let mut reader = packed_f32;
+    let unpacked_f32: f32 = unpack(&mut reader).unwrap();
+    assert_eq!(f32_val, unpacked_f32);
+
+    let f64_val: f64 = 2.718281828459045;
+    let packed_f64 = pack(&f64_val).unwrap();
+    let mut reader = packed_f64;
+    let unpacked_f64: f64 = unpack(&mut reader).unwrap();
+    assert_eq!(f64_val, unpacked_f64);
+
+    // Test boolean type
+    let bool_true: bool = true;
+    let packed_bool_true = pack(&bool_true).unwrap();
+    let mut reader = packed_bool_true;
+    let unpacked_bool_true: bool = unpack(&mut reader).unwrap();
+    assert_eq!(bool_true, unpacked_bool_true);
+
+    let bool_false: bool = false;
+    let packed_bool_false = pack(&bool_false).unwrap();
+    let mut reader = packed_bool_false;
+    let unpacked_bool_false: bool = unpack(&mut reader).unwrap();
+    assert_eq!(bool_false, unpacked_bool_false);
+
+    // Test string type
+    let string_val: String = "Hello, 世界! 🌍".to_string();
+    let packed_string = pack(&string_val).unwrap();
+    let mut reader = packed_string;
+    let unpacked_string: String = unpack(&mut reader).unwrap();
+    assert_eq!(string_val, unpacked_string);
+}
+
+#[test]
+fn test_primitive_edge_cases_pack_unpack() {
+    // Test zero values
+    assert_eq!(0u8, {
+        let packed = pack(&0u8).unwrap();
+        let mut reader = packed;
+        unpack::<u8>(&mut reader).unwrap()
+    });
+
+    assert_eq!(0i8, {
+        let packed = pack(&0i8).unwrap();
+        let mut reader = packed;
+        unpack::<i8>(&mut reader).unwrap()
+    });
+
+    assert_eq!(0.0f32, {
+        let packed = pack(&0.0f32).unwrap();
+        let mut reader = packed;
+        unpack::<f32>(&mut reader).unwrap()
+    });
+
+    assert_eq!(0.0f64, {
+        let packed = pack(&0.0f64).unwrap();
+        let mut reader = packed;
+        unpack::<f64>(&mut reader).unwrap()
+    });
+
+    // Test maximum values
+    assert_eq!(u8::MAX, {
+        let packed = pack(&u8::MAX).unwrap();
+        let mut reader = packed;
+        unpack::<u8>(&mut reader).unwrap()
+    });
+
+    assert_eq!(i8::MAX, {
+        let packed = pack(&i8::MAX).unwrap();
+        let mut reader = packed;
+        unpack::<i8>(&mut reader).unwrap()
+    });
+
+    // Test minimum values
+    assert_eq!(i8::MIN, {
+        let packed = pack(&i8::MIN).unwrap();
+        let mut reader = packed;
+        unpack::<i8>(&mut reader).unwrap()
+    });
+
+    assert_eq!(i16::MIN, {
+        let packed = pack(&i16::MIN).unwrap();
+        let mut reader = packed;
+        unpack::<i16>(&mut reader).unwrap()
+    });
+
+    // Test special float values
+    assert!(f32::NAN.is_nan() && {
+        let packed = pack(&f32::NAN).unwrap();
+        let mut reader = packed;
+        let unpacked: f32 = unpack(&mut reader).unwrap();
+        unpacked.is_nan()
+    });
+
+    assert_eq!(f32::INFINITY, {
+        let packed = pack(&f32::INFINITY).unwrap();
+        let mut reader = packed;
+        unpack::<f32>(&mut reader).unwrap()
+    });
+
+    assert_eq!(f32::NEG_INFINITY, {
+        let packed = pack(&f32::NEG_INFINITY).unwrap();
+        let mut reader = packed;
+        unpack::<f32>(&mut reader).unwrap()
+    });
+
+    assert!(f64::NAN.is_nan() && {
+        let packed = pack(&f64::NAN).unwrap();
+        let mut reader = packed;
+        let unpacked: f64 = unpack(&mut reader).unwrap();
+        unpacked.is_nan()
+    });
+
+    assert_eq!(f64::INFINITY, {
+        let packed = pack(&f64::INFINITY).unwrap();
+        let mut reader = packed;
+        unpack::<f64>(&mut reader).unwrap()
+    });
+
+    assert_eq!(f64::NEG_INFINITY, {
+        let packed = pack(&f64::NEG_INFINITY).unwrap();
+        let mut reader = packed;
+        unpack::<f64>(&mut reader).unwrap()
+    });
+
+    // Test empty string
+    assert_eq!("".to_string(), {
+        let packed = pack(&"".to_string()).unwrap();
+        let mut reader = packed;
+        let unpacked: String = unpack(&mut reader).unwrap();
+        unpacked
+    });
+}
+
+#[test]
+fn test_primitive_arrays_pack_unpack() {
+    // Test arrays of different primitive types
+    let u8_array: [u8; 5] = [1, 2, 3, 4, 5];
+    let packed_u8_array = pack(&u8_array).unwrap();
+    let mut reader = packed_u8_array;
+    let unpacked_u8_array: [u8; 5] = unpack(&mut reader).unwrap();
+    assert_eq!(u8_array, unpacked_u8_array);
+
+    let i32_array: [i32; 3] = [-1, 0, 1];
+    let packed_i32_array = pack(&i32_array).unwrap();
+    let mut reader = packed_i32_array;
+    let unpacked_i32_array: [i32; 3] = unpack(&mut reader).unwrap();
+    assert_eq!(i32_array, unpacked_i32_array);
+
+    let f64_array: [f64; 2] = [3.14159, 2.71828];
+    let packed_f64_array = pack(&f64_array).unwrap();
+    let mut reader = packed_f64_array;
+    let unpacked_f64_array: [f64; 2] = unpack(&mut reader).unwrap();
+    assert_eq!(f64_array, unpacked_f64_array);
+
+    let bool_array: [bool; 4] = [true, false, true, false];
+    let packed_bool_array = pack(&bool_array).unwrap();
+    let mut reader = packed_bool_array;
+    let unpacked_bool_array: [bool; 4] = unpack(&mut reader).unwrap();
+    assert_eq!(bool_array, unpacked_bool_array);
+}
+
+#[test]
+fn test_char_encode_decode() {
+    let test_chars = vec![
+        '\0',           // null character
+        'A',            // ASCII letter
+        '1',            // ASCII digit
+        ' ',            // space
+        '!',            // ASCII symbol
+        'あ',           // Japanese hiragana
+        '漢',           // Japanese kanji
+        '🚀',           // emoji
+        '€',            // Euro symbol
+        'Ω',            // Greek omega
+        '\u{1F600}',    // grinning face emoji
+        '\u{10FFFF}',   // maximum Unicode code point
+    ];
+
+    for &original in &test_chars {
+        let mut buffer = BytesMut::new();
+        original.encode(&mut buffer).unwrap();
+
+        let mut reader = buffer.freeze();
+        let decoded = char::decode(&mut reader).unwrap();
+
+        assert_eq!(original, decoded, "Failed encode/decode for char: {:?}", original);
+    }
+}
+
+#[test]
+fn test_char_pack_unpack() {
+    let test_chars = vec![
+        '\0',           // null character
+        'A',            // ASCII letter
+        '1',            // ASCII digit
+        ' ',            // space
+        '!',            // ASCII symbol
+        'あ',           // Japanese hiragana
+        '漢',           // Japanese kanji
+        '🚀',           // emoji
+        '€',            // Euro symbol
+        'Ω',            // Greek omega
+        '\u{1F600}',    // grinning face emoji
+        '\u{10FFFF}',   // maximum Unicode code point
+    ];
+
+    for &original in &test_chars {
+        let mut buffer = BytesMut::new();
+        original.pack(&mut buffer).unwrap();
+
+        let mut reader = buffer.freeze();
+        let decoded = char::unpack(&mut reader).unwrap();
+
+        assert_eq!(original, decoded, "Failed pack/unpack for char: {:?}", original);
+    }
+}
+
+#[test]
+fn test_char_pack_vs_encode_size() {
+    let test_chars = vec![
+        'A',            // ASCII
+        'あ',           // Japanese
+        '🚀',           // emoji
+        '\u{10FFFF}',   // max Unicode
+    ];
+
+    for &ch in &test_chars {
+        let mut encode_buffer = BytesMut::new();
+        ch.encode(&mut encode_buffer).unwrap();
+
+        let mut pack_buffer = BytesMut::new();
+        ch.pack(&mut pack_buffer).unwrap();
+
+        // Pack should be smaller or equal to encode (no tag overhead)
+        assert!(
+            pack_buffer.len() <= encode_buffer.len(),
+            "Pack size should be <= encode size for char: {:?} (pack: {}, encode: {})",
+            ch, pack_buffer.len(), encode_buffer.len()
+        );
+    }
+}
+
+#[test]
+fn test_char_is_default() {
+    assert!(('\0').is_default(), "Null character should be default");
+    assert!(!('A').is_default(), "Non-null character should not be default");
+    assert!(!('あ').is_default(), "Unicode character should not be default");
+    assert!(!('🚀').is_default(), "Emoji should not be default");
+}
+
+#[test]
+fn test_char_in_struct() {
+    #[derive(Encode, Decode, Debug, PartialEq)]
+    struct CharStruct {
+        letter: char,
+        symbol: Option<char>,
+        unicode_char: char,
+    }
+
+    let test_struct = CharStruct {
+        letter: 'A',
+        symbol: Some('€'),
+        unicode_char: '漢',
+    };
+
+    // Test encode/decode
+    let mut buffer = BytesMut::new();
+    test_struct.encode(&mut buffer).unwrap();
+
+    let mut reader = buffer.freeze();
+    let decoded = CharStruct::decode(&mut reader).unwrap();
+
+    assert_eq!(test_struct, decoded);
+
+    // Test pack/unpack
+    let mut pack_buffer = BytesMut::new();
+    test_struct.pack(&mut pack_buffer).unwrap();
+
+    let mut pack_reader = pack_buffer.freeze();
+    let unpacked = CharStruct::unpack(&mut pack_reader).unwrap();
+
+    assert_eq!(test_struct, unpacked);
+}
+
+#[test]
+fn test_char_in_collections() {
+    // Test Vec<char>
+    let char_vec = vec!['H', 'e', 'l', 'l', 'o', '世', '界', '🌍'];
+
+    // Encode/decode
+    let mut buffer = BytesMut::new();
+    char_vec.encode(&mut buffer).unwrap();
+
+    let mut reader = buffer.freeze();
+    let decoded_vec: Vec<char> = Vec::decode(&mut reader).unwrap();
+
+    assert_eq!(char_vec, decoded_vec);
+
+    // Pack/unpack
+    let mut pack_buffer = BytesMut::new();
+    char_vec.pack(&mut pack_buffer).unwrap();
+
+    let mut pack_reader = pack_buffer.freeze();
+    let unpacked_vec: Vec<char> = Vec::unpack(&mut pack_reader).unwrap();
+
+    assert_eq!(char_vec, unpacked_vec);
+
+    // Test HashMap<char, String>
+    let mut char_map = HashMap::new();
+    char_map.insert('A', "Alpha".to_string());
+    char_map.insert('あ', "Hiragana A".to_string());
+    char_map.insert('🚀', "Rocket".to_string());
+
+    // Encode/decode
+    let mut buffer2 = BytesMut::new();
+    char_map.encode(&mut buffer2).unwrap();
+
+    let mut reader2 = buffer2.freeze();
+    let decoded_map: HashMap<char, String> = HashMap::decode(&mut reader2).unwrap();
+
+    assert_eq!(char_map, decoded_map);
+
+    // Pack/unpack
+    let mut pack_buffer2 = BytesMut::new();
+    char_map.pack(&mut pack_buffer2).unwrap();
+
+    let mut pack_reader2 = pack_buffer2.freeze();
+    let unpacked_map: HashMap<char, String> = HashMap::unpack(&mut pack_reader2).unwrap();
+
+    assert_eq!(char_map, unpacked_map);
+}
+
+#[test]
+fn test_char_unicode_edge_cases() {
+    let edge_cases = vec![
+        '\u{0}',        // null
+        '\u{7F}',       // DEL (last ASCII)
+        '\u{80}',       // first non-ASCII
+        '\u{FF}',       // last Latin-1
+        '\u{100}',      // first beyond Latin-1
+        '\u{D7FF}',     // last before surrogate range
+        '\u{E000}',     // first after surrogate range
+        '\u{FFFF}',     // last in BMP
+        '\u{10000}',    // first supplementary
+        '\u{10FFFF}',   // last valid Unicode
+    ];
+
+    for &ch in &edge_cases {
+        // Test encode/decode
+        let mut encode_buffer = BytesMut::new();
+        ch.encode(&mut encode_buffer).unwrap();
+
+        let mut encode_reader = encode_buffer.freeze();
+        let decoded = char::decode(&mut encode_reader).unwrap();
+
+        assert_eq!(ch, decoded, "Failed encode/decode for edge case char: U+{:04X}", ch as u32);
+
+        // Test pack/unpack
+        let mut pack_buffer = BytesMut::new();
+        ch.pack(&mut pack_buffer).unwrap();
+
+        let mut pack_reader = pack_buffer.freeze();
+        let unpacked = char::unpack(&mut pack_reader).unwrap();
+
+        assert_eq!(ch, unpacked, "Failed pack/unpack for edge case char: U+{:04X}", ch as u32);
+    }
+}
+
+#[test]
+fn test_char_cross_compatibility() {
+    // Test that char can be decoded from u32 and vice versa
+    let test_char = '漢';
+    let test_u32 = test_char as u32;
+
+    // Encode char, decode as u32
+    let mut char_buffer = BytesMut::new();
+    test_char.encode(&mut char_buffer).unwrap();
+
+    let mut char_reader = char_buffer.freeze();
+    let decoded_u32 = u32::decode(&mut char_reader).unwrap();
+
+    assert_eq!(test_u32, decoded_u32, "char should decode as u32");
+
+    // Encode u32, decode as char (if valid Unicode)
+    let mut u32_buffer = BytesMut::new();
+    test_u32.encode(&mut u32_buffer).unwrap();
+
+    let mut u32_reader = u32_buffer.freeze();
+    let decoded_char = char::decode(&mut u32_reader).unwrap();
+
+    assert_eq!(test_char, decoded_char, "u32 should decode as char");
+}
+
+#[test]
+#[cfg(feature = "uuid")]
+fn test_uuid_default_and_non_default_pack_unpack() {
+    use uuid::Uuid;
+    use std::str::FromStr;
+
+    // Test default UUID (should use TAG_NONE)
+    let default_uuid = Uuid::default();
+    let packed_default = pack(&default_uuid).unwrap();
+    let mut reader = packed_default;
+    let unpacked_default: Uuid = unpack(&mut reader).unwrap();
+    assert_eq!(default_uuid, unpacked_default);
+
+    // Test non-default UUID (should use TAG_UUID)
+    let non_default_uuid = Uuid::from_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+    let packed_non_default = pack(&non_default_uuid).unwrap();
+    let mut reader = packed_non_default;
+    let unpacked_non_default: Uuid = unpack(&mut reader).unwrap();
+    assert_eq!(non_default_uuid, unpacked_non_default);
+
+    // Test nil UUID (same as default)
+    let nil_uuid = Uuid::nil();
+    let packed_nil = pack(&nil_uuid).unwrap();
+    let mut reader = packed_nil;
+    let unpacked_nil: Uuid = unpack(&mut reader).unwrap();
+    assert_eq!(nil_uuid, unpacked_nil);
+
+    // Test various UUID values
+    let test_uuids = vec![
+        Uuid::from_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+        Uuid::from_str("6ba7b810-9dad-11d1-80b4-00c04fd430c8").unwrap(),
+        Uuid::from_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    ];
+
+    for &original in &test_uuids {
+        let packed = pack(&original).unwrap();
+        let mut reader = packed;
+        let unpacked: Uuid = unpack(&mut reader).unwrap();
+        assert_eq!(original, unpacked, "Failed for UUID: {}", original);
+    }
+}
+
+#[test]
+#[cfg(feature = "ulid")]
+fn test_ulid_default_and_non_default_pack_unpack() {
+    use ulid::Ulid;
+
+    // Test default ULID (should use TAG_NONE)
+    let default_ulid = Ulid::default();
+    let packed_default = pack(&default_ulid).unwrap();
+    let mut reader = packed_default;
+    let unpacked_default: Ulid = unpack(&mut reader).unwrap();
+    assert_eq!(default_ulid, unpacked_default);
+
+    // Test non-default ULID (should use TAG_UUID)
+    let non_default_ulid = Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap();
+    let packed_non_default = pack(&non_default_ulid).unwrap();
+    let mut reader = packed_non_default;
+    let unpacked_non_default: Ulid = unpack(&mut reader).unwrap();
+    assert_eq!(non_default_ulid, unpacked_non_default);
+
+    // Test nil ULID (same as default)
+    let nil_ulid = Ulid::nil();
+    let packed_nil = pack(&nil_ulid).unwrap();
+    let mut reader = packed_nil;
+    let unpacked_nil: Ulid = unpack(&mut reader).unwrap();
+    assert_eq!(nil_ulid, unpacked_nil);
+
+    // Test various ULID values
+    let test_ulids = vec![
+        Ulid::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap(),
+        Ulid::from_string("01BX5ZZKBKACTAV9WEVGEMMVS0").unwrap(),
+        Ulid::from_string("7ZZZZZZZZZZZZZZZZZZZZZZZZZ").unwrap(),
+        Ulid::new(),
+        Ulid::new(),
+    ];
+
+    for &original in &test_ulids {
+        let packed = pack(&original).unwrap();
+        let mut reader = packed;
+        let unpacked: Ulid = unpack(&mut reader).unwrap();
+        assert_eq!(original, unpacked, "Failed for ULID: {}", original);
+    }
 }

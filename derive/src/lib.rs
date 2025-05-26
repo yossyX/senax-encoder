@@ -37,6 +37,95 @@ fn calculate_id_from_name(name: &str) -> u64 {
     }
 }
 
+/// Generate structure information text for CRC64 hashing
+///
+/// This function creates a deterministic text representation of the structure
+/// that includes type name, field names, and field types. This is used to
+/// generate a structure hash for pack format validation.
+///
+/// # Arguments
+///
+/// * `input` - The parsed derive input containing structure information
+///
+/// # Returns
+///
+/// A string containing the structure information
+#[cfg(feature = "pack")]
+fn generate_structure_info(input: &DeriveInput) -> String {
+    let mut info = String::new();
+    info.push_str(&format!("type:{}", input.ident));
+
+    match &input.data {
+        Data::Struct(s) => {
+            info.push_str("|struct");
+            match &s.fields {
+                Fields::Named(fields) => {
+                    info.push_str("|named");
+                    for field in &fields.named {
+                        let field_name = field.ident.as_ref().unwrap().to_string();
+                        let field_type = {
+                            let ty = &field.ty;
+                            quote!(#ty).to_string()
+                        };
+                        info.push_str(&format!("|{}:{}", field_name, field_type));
+                    }
+                }
+                Fields::Unnamed(fields) => {
+                    info.push_str("|unnamed");
+                    for (i, field) in fields.unnamed.iter().enumerate() {
+                        let field_type = {
+                            let ty = &field.ty;
+                            quote!(#ty).to_string()
+                        };
+                        info.push_str(&format!("|{}:{}", i, field_type));
+                    }
+                }
+                Fields::Unit => {
+                    info.push_str("|unit");
+                }
+            }
+        }
+        Data::Enum(e) => {
+            info.push_str("|enum");
+            for variant in &e.variants {
+                let variant_name = variant.ident.to_string();
+                info.push_str(&format!("|variant:{}", variant_name));
+                match &variant.fields {
+                    Fields::Named(fields) => {
+                        info.push_str("|named");
+                        for field in &fields.named {
+                            let field_name = field.ident.as_ref().unwrap().to_string();
+                            let field_type = {
+                                let ty = &field.ty;
+                                quote!(#ty).to_string()
+                            };
+                            info.push_str(&format!("|{}:{}", field_name, field_type));
+                        }
+                    }
+                    Fields::Unnamed(fields) => {
+                        info.push_str("|unnamed");
+                        for (i, field) in fields.unnamed.iter().enumerate() {
+                            let field_type = {
+                                let ty = &field.ty;
+                                quote!(#ty).to_string()
+                            };
+                            info.push_str(&format!("|{}:{}", i, field_type));
+                        }
+                    }
+                    Fields::Unit => {
+                        info.push_str("|unit");
+                    }
+                }
+            }
+        }
+        Data::Union(_) => {
+            info.push_str("|union");
+        }
+    }
+
+    info
+}
+
 /// Check if a variant has the #[default] attribute
 fn has_default_attribute(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|attr| attr.path().is_ident("default"))
@@ -273,6 +362,7 @@ fn extract_inner_type_from_option(ty: &Type) -> Option<&Type> {
 /// }
 /// ```
 #[proc_macro_derive(Encode, attributes(senax))]
+#[allow(unused_variables)]
 pub fn derive_encode(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
@@ -519,6 +609,12 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
         Data::Union(_) => unimplemented!("Unions are not supported"),
     };
 
+    // Generate structure information and CRC64 hash for pack format
+    #[cfg(feature = "pack")]
+    let structure_info = generate_structure_info(&input);
+    #[cfg(feature = "pack")]
+    let structure_hash = CRC64.checksum(structure_info.as_bytes());
+
     // Generate pack implementation for structs and enums (no field IDs for struct fields)
     #[cfg(feature = "pack")]
     let pack_fields = match &input.data {
@@ -531,6 +627,8 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                     }
                 });
                 quote! {
+                    // Write structure hash first
+                    writer.put_u64(#structure_hash);
                     #(#field_encode)*
                 }
             }
@@ -542,10 +640,15 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                     }
                 });
                 quote! {
+                    // Write structure hash first
+                    writer.put_u64(#structure_hash);
                     #(#field_encode)*
                 }
             }
-            Fields::Unit => quote! {},
+            Fields::Unit => quote! {
+                // Write structure hash first
+                writer.put_u64(#structure_hash);
+            },
         },
         Data::Enum(e) => {
             let mut variant_pack = Vec::new();
@@ -577,6 +680,8 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                         });
                         variant_pack.push(quote! {
                             #name::#variant_ident { #(#field_idents),* } => {
+                                // Write structure hash first
+                                writer.put_u64(#structure_hash);
                                 writer.put_u8(senax_encoder::core::TAG_ENUM_NAMED);
                                 senax_encoder::core::write_field_id_optimized(writer, #variant_id)?;
                                 #(#field_pack)*
@@ -591,6 +696,8 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                         let field_bindings_ref = &field_bindings;
                         variant_pack.push(quote! {
                             #name::#variant_ident( #(#field_bindings_ref),* ) => {
+                                // Write structure hash first
+                                writer.put_u64(#structure_hash);
                                 writer.put_u8(senax_encoder::core::TAG_ENUM_UNNAMED);
                                 senax_encoder::core::write_field_id_optimized(writer, #variant_id)?;
                                 #(
@@ -602,6 +709,8 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
                     Fields::Unit => {
                         variant_pack.push(quote! {
                             #name::#variant_ident => {
+                                // Write structure hash first
+                                writer.put_u64(#structure_hash);
                                 writer.put_u8(senax_encoder::core::TAG_ENUM);
                                 senax_encoder::core::write_field_id_optimized(writer, #variant_id)?;
                             }
@@ -646,19 +755,27 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
     #[cfg(not(feature = "pack"))]
     let pack_method = quote! {};
 
+    #[cfg(feature = "encode")]
+    let encode_method = quote! {
+        fn encode(&self, writer: &mut bytes::BytesMut) -> senax_encoder::Result<()> {
+            use bytes::{Buf, BufMut};
+            #encode_fields
+            Ok(())
+        }
+
+        fn is_default(&self) -> bool {
+            #is_default_impl
+        }
+    };
+
+    #[cfg(not(feature = "encode"))]
+    let encode_method = quote! {};
+
     TokenStream::from(quote! {
         impl #impl_generics senax_encoder::Encoder for #name #ty_generics #where_clause {
-            fn encode(&self, writer: &mut bytes::BytesMut) -> senax_encoder::Result<()> {
-                use bytes::{Buf, BufMut};
-                #encode_fields
-                Ok(())
-            }
+            #encode_method
 
             #pack_method
-
-            fn is_default(&self) -> bool {
-                #is_default_impl
-            }
         }
     })
 }
@@ -691,10 +808,17 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
 /// }
 /// ```
 #[proc_macro_derive(Decode, attributes(senax))]
+#[allow(unused_variables)]
 pub fn derive_decode(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    // Generate structure information and CRC64 hash for pack format validation
+    #[cfg(feature = "pack")]
+    let structure_info = generate_structure_info(&input);
+    #[cfg(feature = "pack")]
+    let structure_hash = CRC64.checksum(structure_info.as_bytes());
 
     let decode_fields = match &input.data {
         Data::Struct(s) => match &s.fields {
@@ -1049,6 +1173,19 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                     }
                 });
                 quote! {
+                    // Read and validate structure hash
+                    if reader.remaining() < 8 {
+                        return Err(senax_encoder::EncoderError::InsufficientData);
+                    }
+                    let received_hash = reader.get_u64();
+                    let expected_hash = #structure_hash;
+                    if received_hash != expected_hash {
+                        return Err(senax_encoder::EncoderError::Decode(format!(
+                            "Structure hash mismatch for {}: expected 0x{:016X}, got 0x{:016X}",
+                            stringify!(#name), expected_hash, received_hash
+                        )));
+                    }
+                    
                     Ok(#name {
                         #(#field_assignments)*
                     })
@@ -1062,12 +1199,38 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                     }
                 });
                 quote! {
+                    // Read and validate structure hash
+                    if reader.remaining() < 8 {
+                        return Err(senax_encoder::EncoderError::InsufficientData);
+                    }
+                    let received_hash = reader.get_u64();
+                    let expected_hash = #structure_hash;
+                    if received_hash != expected_hash {
+                        return Err(senax_encoder::EncoderError::Decode(format!(
+                            "Structure hash mismatch for {}: expected 0x{:016X}, got 0x{:016X}",
+                            stringify!(#name), expected_hash, received_hash
+                        )));
+                    }
+                    
                     Ok(#name(
                         #(#field_decode),*
                     ))
                 }
             }
             Fields::Unit => quote! {
+                // Read and validate structure hash
+                if reader.remaining() < 8 {
+                    return Err(senax_encoder::EncoderError::InsufficientData);
+                }
+                let received_hash = reader.get_u64();
+                let expected_hash = #structure_hash;
+                if received_hash != expected_hash {
+                    return Err(senax_encoder::EncoderError::Decode(format!(
+                        "Structure hash mismatch for {}: expected 0x{:016X}, got 0x{:016X}",
+                        stringify!(#name), expected_hash, received_hash
+                    )));
+                }
+                
                 Ok(#name)
             },
         },
@@ -1139,6 +1302,19 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                 }
             }
             quote! {
+                // Read and validate structure hash
+                if reader.remaining() < 8 {
+                    return Err(senax_encoder::EncoderError::InsufficientData);
+                }
+                let received_hash = reader.get_u64();
+                let expected_hash = #structure_hash;
+                if received_hash != expected_hash {
+                    return Err(senax_encoder::EncoderError::Decode(format!(
+                        "Structure hash mismatch for {}: expected 0x{:016X}, got 0x{:016X}",
+                        stringify!(#name), expected_hash, received_hash
+                    )));
+                }
+                
                 if reader.remaining() == 0 {
                     return Err(senax_encoder::EncoderError::InsufficientData);
                 }
@@ -1183,12 +1359,20 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
     #[cfg(not(feature = "pack"))]
     let unpack_method = quote! {};
 
+    #[cfg(feature = "encode")]
+    let decode_method = quote! {
+        fn decode(reader: &mut bytes::Bytes) -> senax_encoder::Result<Self> {
+            use bytes::{Buf, BufMut};
+            #decode_fields
+        }
+    };
+
+    #[cfg(not(feature = "encode"))]
+    let decode_method = quote! {};
+
     TokenStream::from(quote! {
         impl #impl_generics senax_encoder::Decoder for #name #ty_generics #where_clause {
-            fn decode(reader: &mut bytes::Bytes) -> senax_encoder::Result<Self> {
-                use bytes::{Buf, BufMut};
-                #decode_fields
-            }
+            #decode_method
 
             #unpack_method
         }

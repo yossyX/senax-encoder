@@ -1,3 +1,5 @@
+#![cfg(feature = "encode")]
+
 use bytes::BytesMut;
 use senax_encoder::Decoder;
 use senax_encoder::Encoder;

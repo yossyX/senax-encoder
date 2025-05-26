@@ -22,6 +22,12 @@
 //!
 //! The following optional features enable support for popular crates and types:
 //!
+//! ### Core Features
+//! - `encode` — Enables the `encode()`/`decode()` functions and methods with schema evolution support (field IDs, type tags). Default enabled.
+//! - `pack` — Enables the `pack()`/`unpack()` functions and methods for compact encoding without schema evolution support.
+//! - `vec_u8` — Optimizes `Vec<u8>` encoding to use the same binary tag as `Bytes` for better compatibility and smaller size. When enabled, `Vec<u8>` and `Bytes` are interchangeable in the binary format. Default enabled.
+//!
+//! ### External Crate Support
 //! - `chrono` — Enables encoding/decoding of `chrono::DateTime`, `NaiveDate`, and `NaiveTime` types.
 //! - `uuid` — Enables encoding/decoding of `uuid::Uuid`.
 //! - `ulid` — Enables encoding/decoding of `ulid::Ulid` (shares the same tag as UUID for binary compatibility).
@@ -31,23 +37,7 @@
 //! - `ahash` — Enables encoding/decoding of `ahash::AHashMap` and `ahash::AHashSet` (high-performance hash collections).
 //! - `smol_str` — Enables encoding/decoding of `smol_str::SmolStr` (small string optimization).
 //! - `serde_json` — Enables encoding/decoding of `serde_json::Value` (JSON values as dynamic type).
-//!
-//! ## Example
-//! ```rust
-//! use senax_encoder::{Encode, Decode};
-//! use bytes::BytesMut;
-//!
-//! #[derive(Encode, Decode, PartialEq, Debug)]
-//! struct MyStruct {
-//!     id: u32,
-//!     name: String,
-//! }
-//!
-//! let value = MyStruct { id: 42, name: "hello".to_string() };
-//! let mut buf = senax_encoder::encode(&value).unwrap();
-//! let decoded: MyStruct = senax_encoder::decode(&mut buf).unwrap();
-//! assert_eq!(value, decoded);
-//! ```
+
 
 pub mod core;
 mod features;
@@ -104,6 +94,7 @@ pub type Result<T> = std::result::Result<T, EncoderError>;
 /// let decoded: MyStruct = decode(&mut buf).unwrap();
 /// assert_eq!(value, decoded);
 /// ```
+#[cfg(feature = "encode")]
 pub fn decode<T: Decoder>(reader: &mut Bytes) -> Result<T> {
     T::decode(reader)
 }
@@ -132,6 +123,7 @@ pub fn decode<T: Decoder>(reader: &mut Bytes) -> Result<T> {
 /// let decoded: MyStruct = decode(&mut buf).unwrap();
 /// assert_eq!(value, decoded);
 /// ```
+#[cfg(feature = "encode")]
 pub fn encode<T: Encoder>(value: &T) -> Result<Bytes> {
     let mut writer = BytesMut::new();
     value.encode(&mut writer)?;
@@ -153,6 +145,7 @@ pub trait Encoder {
     ///
     /// # Arguments
     /// * `writer` - The buffer to write the encoded bytes into.
+    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()>;
 
     /// Pack the value into the given buffer without schema evolution support.
@@ -169,12 +162,11 @@ pub trait Encoder {
     /// - For enums: Variant IDs are still included, but field IDs within variants are omitted
     /// - For primitives: Some type tags may be omitted for maximum compactness
     #[cfg(feature = "pack")]
-    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        self.encode(writer)
-    }
+    fn pack(&self, writer: &mut BytesMut) -> Result<()>;
 
     /// Returns true if this value equals its default value.
     /// Used by `#[senax(skip_default)]` attribute to skip encoding default values.
+    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool;
 }
 
@@ -193,6 +185,7 @@ pub trait Decoder: Sized {
     ///
     /// # Arguments
     /// * `reader` - The buffer to read the encoded bytes from.
+    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self>;
 
     /// Unpack the value from the given buffer without schema evolution support.
@@ -209,9 +202,7 @@ pub trait Decoder: Sized {
     /// - For enums: Variant IDs are still expected, but field IDs within variants are not
     /// - For primitives: Some type tags may be omitted, with relaxed validation
     #[cfg(feature = "pack")]
-    fn unpack(reader: &mut Bytes) -> Result<Self> {
-        Self::decode(reader)
-    }
+    fn unpack(reader: &mut Bytes) -> Result<Self>;
 }
 
 /// Convenience function to pack a value to bytes.

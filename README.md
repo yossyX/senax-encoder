@@ -32,6 +32,12 @@ You can control encoding/decoding behavior using the following attributes:
 
 The following optional features enable support for popular crates and types:
 
+### Core Features
+- `encode` — Enables the `encode()`/`decode()` functions and methods with schema evolution support (field IDs, type tags). Default enabled.
+- `pack` — Enables the `pack()`/`unpack()` functions and methods for compact encoding without schema evolution support.
+- `vec_u8` — Optimizes `Vec<u8>` encoding to use the same binary tag as `Bytes` for better compatibility and smaller size. When enabled, `Vec<u8>` and `Bytes` are interchangeable in the binary format. Default enabled.
+
+### External Crate Support
 - `chrono` — Enables encoding/decoding of `chrono::DateTime`, `NaiveDate`, and `NaiveTime` types.
 - `uuid` — Enables encoding/decoding of `uuid::Uuid`.
 - `ulid` — Enables encoding/decoding of `ulid::Ulid` (shares the same tag as UUID for binary compatibility).
@@ -62,9 +68,16 @@ struct User {
 }
 
 let user = User { id: 42, name: "Alice".into(), email: Some("alice@example.com".into()) };
+
+// Schema evolution support (with field IDs)
 let mut bytes = senax_encoder::encode(&user).unwrap();
 let decoded: User = senax_encoder::decode(&mut bytes).unwrap();
 assert_eq!(user, decoded);
+
+// Compact encoding (without field IDs, smaller size)
+let mut packed = senax_encoder::pack(&user).unwrap();
+let unpacked: User = senax_encoder::unpack(&mut packed).unwrap();
+assert_eq!(user, unpacked);
 ```
 
 ## Usage
@@ -85,7 +98,17 @@ let mut bytes = senax_encoder::encode(&value)?;
 let value2: MyStruct = senax_encoder::decode(&mut bytes)?;
 ```
 
-### 3. Schema evolution (adding/removing/changing fields)
+### 3. Compact pack/unpack (without schema evolution)
+```rust
+// Pack for maximum compactness (no field IDs, smaller size)
+let mut bytes = senax_encoder::pack(&value)?;
+let value2: MyStruct = senax_encoder::unpack(&mut bytes)?;
+
+// Note: pack/unpack is field-order dependent and doesn't support schema evolution
+// Use when you need maximum performance and size optimization
+```
+
+### 4. Schema evolution (adding/removing/changing fields)
 - Field IDs are **automatically generated from field names (CRC64)** by default.
   - Use `#[senax(id=...)]` only if you need to resolve a collision.
 - Because mapping is by field ID (u64):
@@ -95,14 +118,14 @@ let value2: MyStruct = senax_encoder::decode(&mut bytes)?;
   - **New struct → old struct**: unknown fields are automatically skipped.
 - **No field names are stored, only u64 IDs, so field addition/removal/reordering/type changes are robust.**
 
-### 4. Feature flags
+### 5. Feature flags
 - Enable only the types you need: `indexmap`, `chrono`, `rust_decimal`, `uuid`, `ulid`, `serde_json`, etc.
 - Minimizes dependencies and build time.
 
 ## Supported Types
 
 ### Core Types (always available)
-- Primitives: `u8~u128`, `i8~i128`, `f32`, `f64`, `bool`, `String`, `Bytes`
+- Primitives: `u8~u128`, `i8~i128`, `f32`, `f64`, `bool`, `String`, `Bytes` (zero-copy binary data)
 - Option, Vec, arrays, HashMap, BTreeMap, Set, Tuple, Enum, Struct, Arc, Box
 
 ### Feature-gated Types

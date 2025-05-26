@@ -1,3 +1,5 @@
+#![cfg(feature = "encode")]
+
 use bytes::{Bytes, BytesMut};
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, Utc};
@@ -303,28 +305,28 @@ fn test_optional_field_with_custom_id() {
 
 #[test]
 fn test_unsigned_signed_cross_decode() {
-    // u16→i16, 範囲内
+    // u16→i16, within range
     let v: u16 = 12345;
     let mut buf = BytesMut::new();
     v.encode(&mut buf).unwrap();
     let mut cur = buf.freeze();
     let got = i16::decode(&mut cur).unwrap();
     assert_eq!(got, v as i16);
-    // u16→i16, 範囲外
+    // u16→i16, out of range
     let v: u16 = 40000;
     let mut buf = BytesMut::new();
     v.encode(&mut buf).unwrap();
     let mut cur = buf.freeze();
     let res = i16::decode(&mut cur);
     assert!(res.is_err());
-    // i16→u16, 正
+    // i16→u16, positive
     let v: i16 = 1234;
     let mut buf = BytesMut::new();
     v.encode(&mut buf).unwrap();
     let mut cur = buf.freeze();
     let got = u16::decode(&mut cur).unwrap();
     assert_eq!(got, v as u16);
-    // i16→u16, 負の値（エラーになるべき）
+    // i16→u16, negative value (should error)
     let v: i16 = -1234;
     let mut buf = BytesMut::new();
     v.encode(&mut buf).unwrap();
@@ -416,7 +418,7 @@ fn test_unsigned_integer_compact_encoding() {
         let got = u128::decode(&mut cur).unwrap();
         assert_eq!(v, got, "u128 roundtrip failed for {}", v);
     }
-    // usize（プラットフォーム依存だがu64相当でテスト）
+    // usize (platform-dependent but tested as u64 equivalent)
     let usize_values = [
         0usize,
         1,
@@ -528,7 +530,7 @@ fn test_signed_integer_compact_encoding() {
         let got = i128::decode(&mut cur).unwrap();
         assert_eq!(v, got, "i128 roundtrip failed for {}", v);
     }
-    // isize（プラットフォーム依存だがi64相当でテスト）
+    // isize (platform-dependent but tested as i64 equivalent)
     let isize_values = [
         0isize,
         1,
@@ -784,7 +786,7 @@ fn test_chrono_naive_time() {
 #[test]
 #[cfg(feature = "chrono")]
 fn test_chrono_datetime_cross_timezone() {
-    // DateTime<Utc>でシリアライズして、DateTime<Local>でデシリアライズ
+    // Serialize with DateTime<Utc> and deserialize with DateTime<Local>
     let mut writer_utc = BytesMut::new();
     let utc_original = DateTime::from_timestamp(1640995200, 123456789).unwrap();
     utc_original.encode(&mut writer_utc).unwrap();
@@ -792,10 +794,10 @@ fn test_chrono_datetime_cross_timezone() {
     let mut reader_utc = writer_utc.freeze();
     let local_from_utc = DateTime::<Local>::decode(&mut reader_utc).unwrap();
 
-    // UTC時刻が一致することを確認
+    // Verify that UTC times match
     assert_eq!(utc_original, local_from_utc.with_timezone(&Utc));
 
-    // DateTime<Local>でシリアライズして、DateTime<Utc>でデシリアライズ
+    // Serialize with DateTime<Local> and deserialize with DateTime<Utc>
     let mut writer_local = BytesMut::new();
     let local_original = utc_original.with_timezone(&Local);
     local_original.encode(&mut writer_local).unwrap();
@@ -803,7 +805,7 @@ fn test_chrono_datetime_cross_timezone() {
     let mut reader_local = writer_local.freeze();
     let utc_from_local = DateTime::<Utc>::decode(&mut reader_local).unwrap();
 
-    // UTC時刻が一致することを確認
+    // Verify that UTC times match
     assert_eq!(local_original.with_timezone(&Utc), utc_from_local);
 }
 
@@ -823,7 +825,7 @@ fn test_bytes_encode() {
 
 #[test]
 fn test_bytes_from_string_data() {
-    // StringでシリアライズしたデータをBytesでデシリアライズ
+    // Serialize as String and deserialize as Bytes
     let original_string = "Hello, 日本語 test!";
     let mut writer = BytesMut::new();
     original_string.to_string().encode(&mut writer).unwrap();
@@ -831,21 +833,8 @@ fn test_bytes_from_string_data() {
     let mut reader = writer.freeze();
     let bytes_result = Bytes::decode(&mut reader).unwrap();
 
-    // UTF-8バイト列として一致することを確認
+    // Verify they match as UTF-8 byte sequence
     assert_eq!(bytes_result, Bytes::from(original_string.as_bytes()));
-}
-
-#[test]
-fn test_bytes_from_vec_u8_data() {
-    // Vec<u8>でシリアライズしたデータをBytesでデシリアライズ
-    let original_vec = vec![0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE, 0xFD];
-    let mut writer = BytesMut::new();
-    original_vec.encode(&mut writer).unwrap();
-
-    let mut reader = writer.freeze();
-    let bytes_result = Bytes::decode(&mut reader).unwrap();
-
-    assert_eq!(bytes_result, Bytes::from(original_vec));
 }
 
 #[test]
@@ -1047,15 +1036,15 @@ fn test_complex_struct_encode() {
         },
     };
 
-    // シリアライズ
+    // Serialize
     let mut buffer = BytesMut::new();
     complex_order.encode(&mut buffer).unwrap();
 
-    // バッファサイズを確認（複雑なデータなので大きくなるはず）
+    // Check buffer size (should be large since it's complex data)
     println!("Encoded complex order size: {} bytes", buffer.len());
-    assert!(buffer.len() > 100); // 十分複雑なデータなので100バイト以上になるはず
+    assert!(buffer.len() > 100); // Should be over 100 bytes since it's sufficiently complex data
 
-    // デシリアライズ
+    // Deserialize
     let mut reader = buffer.freeze();
     let decoded = ComplexOrder::decode(&mut reader).unwrap();
 
@@ -1081,7 +1070,7 @@ fn test_complex_struct_encode() {
 #[test]
 #[cfg(all(feature = "chrono", feature = "indexmap"))]
 fn test_complex_struct_partial_fields() {
-    // 一部のオプショナルフィールドがNoneの場合
+    // Test with some optional fields as None
     let minimal_order = ComplexOrder {
         order_id: 1,
         customer: PersonalInfo {
@@ -1245,13 +1234,13 @@ fn test_cross_decode_struct_option() {
     let a = StructA::decode(&mut cur).unwrap();
     assert_eq!(a.value, -99);
 
-    // StructB(None) → StructA（エラーになるべき）
+    // StructB(None) → StructA (should error)
     let b = StructB { value: None };
     let mut buf = BytesMut::new();
     b.encode(&mut buf).unwrap();
     let mut cur = buf.freeze();
     let a = StructA::decode(&mut cur);
-    assert!(a.is_err(), "None→i32はエラーになるべき");
+    assert!(a.is_err(), "None→i32 should error");
 }
 
 #[test]
