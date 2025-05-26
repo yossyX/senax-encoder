@@ -34,7 +34,7 @@
 //!
 //! ## Example
 //! ```rust
-//! use senax_encoder::{Encoder, Decoder, Encode, Decode};
+//! use senax_encoder::{Encode, Decode};
 //! use bytes::BytesMut;
 //!
 //! #[derive(Encode, Decode, PartialEq, Debug)]
@@ -44,9 +44,8 @@
 //! }
 //!
 //! let value = MyStruct { id: 42, name: "hello".to_string() };
-//! let mut buf = BytesMut::new();
-//! value.encode(&mut buf).unwrap();
-//! let decoded = MyStruct::decode(&mut buf.freeze()).unwrap();
+//! let mut buf = senax_encoder::encode(&value).unwrap();
+//! let decoded: MyStruct = senax_encoder::decode(&mut buf).unwrap();
 //! assert_eq!(value, decoded);
 //! ```
 
@@ -91,7 +90,7 @@ pub type Result<T> = std::result::Result<T, EncoderError>;
 ///
 /// # Example
 /// ```rust
-/// use senax_encoder::{decode, Encoder, Decoder, Encode, Decode};
+/// use senax_encoder::{encode, decode, Encode, Decode};
 /// use bytes::BytesMut;
 ///
 /// #[derive(Encode, Decode, PartialEq, Debug)]
@@ -101,9 +100,8 @@ pub type Result<T> = std::result::Result<T, EncoderError>;
 /// }
 ///
 /// let value = MyStruct { id: 42, name: "hello".to_string() };
-/// let mut buf = BytesMut::new();
-/// value.encode(&mut buf).unwrap();
-/// let decoded: MyStruct = decode(&mut buf.freeze()).unwrap();
+/// let mut buf = encode(&value).unwrap();
+/// let decoded: MyStruct = decode(&mut buf).unwrap();
 /// assert_eq!(value, decoded);
 /// ```
 pub fn decode<T: Decoder>(reader: &mut Bytes) -> Result<T> {
@@ -120,7 +118,7 @@ pub fn decode<T: Decoder>(reader: &mut Bytes) -> Result<T> {
 ///
 /// # Example
 /// ```rust
-/// use senax_encoder::{encode, Encoder, Decoder, Encode, Decode};
+/// use senax_encoder::{encode, decode, Encode, Decode};
 /// use bytes::BytesMut;
 ///
 /// #[derive(Encode, Decode, PartialEq, Debug)]
@@ -130,13 +128,14 @@ pub fn decode<T: Decoder>(reader: &mut Bytes) -> Result<T> {
 /// }
 ///
 /// let value = MyStruct { id: 42, name: "hello".to_string() };
-/// let mut buf = BytesMut::new();
-/// encode(&value, &mut buf).unwrap();
-/// let decoded: MyStruct = MyStruct::decode(&mut buf.freeze()).unwrap();
+/// let mut buf = encode(&value).unwrap();
+/// let decoded: MyStruct = decode(&mut buf).unwrap();
 /// assert_eq!(value, decoded);
 /// ```
-pub fn encode<T: Encoder>(value: &T, writer: &mut BytesMut) -> Result<()> {
-    value.encode(writer)
+pub fn encode<T: Encoder>(value: &T) -> Result<Bytes> {
+    let mut writer = BytesMut::new();
+    value.encode(&mut writer)?;
+    Ok(writer.freeze())
 }
 
 /// Trait for types that can be encoded into the senax binary format.

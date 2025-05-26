@@ -42,25 +42,6 @@ The following optional features enable support for popular crates and types:
 - `smol_str` — Enables encoding/decoding of `smol_str::SmolStr` (small string optimization).
 - `serde_json` — Enables encoding/decoding of `serde_json::Value` for dynamic JSON data.
 
-## Example
-
-```rust
-use senax_encoder::{Encoder, Decoder, Encode, Decode};
-use bytes::BytesMut;
-
-#[derive(Encode, Decode, PartialEq, Debug)]
-struct MyStruct {
-    id: u32,
-    name: String,
-}
-
-let value = MyStruct { id: 42, name: "hello".to_string() };
-let mut buf = BytesMut::new();
-value.encode(&mut buf).unwrap();
-let decoded = MyStruct::decode(&mut buf.freeze()).unwrap();
-assert_eq!(value, decoded);
-```
-
 ## Quick Start
 
 Add to your `Cargo.toml`:
@@ -71,8 +52,7 @@ senax-encoder = "0.1"
 
 Basic usage:
 ```rust
-use senax_encoder::{Encoder, Decoder, Encode, Decode};
-use bytes::{BytesMut, Bytes};
+use senax_encoder::{Encode, Decode};
 
 #[derive(Encode, Decode, Debug, PartialEq)]
 struct User {
@@ -82,10 +62,8 @@ struct User {
 }
 
 let user = User { id: 42, name: "Alice".into(), email: Some("alice@example.com".into()) };
-let mut buf = BytesMut::new();
-user.encode(&mut buf).unwrap();
-let mut bytes = buf.freeze();
-let decoded = User::decode(&mut bytes).unwrap();
+let mut bytes = senax_encoder::encode(&user).unwrap();
+let decoded: User = senax_encoder::decode(&mut bytes).unwrap();
 assert_eq!(user, decoded);
 ```
 
@@ -103,10 +81,8 @@ struct MyStruct {
 
 ### 2. Binary encode/decode
 ```rust
-let mut buf = BytesMut::new();
-value.encode(&mut buf)?;
-let mut bytes = buf.freeze();
-let value2 = MyStruct::decode(&mut bytes)?;
+let mut bytes = senax_encoder::encode(&value)?;
+let value2: MyStruct = senax_encoder::decode(&mut bytes)?;
 ```
 
 ### 3. Schema evolution (adding/removing/changing fields)
