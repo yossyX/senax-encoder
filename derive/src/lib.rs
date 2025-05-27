@@ -50,7 +50,6 @@ fn calculate_id_from_name(name: &str) -> u64 {
 /// # Returns
 ///
 /// A string containing the structure information
-#[cfg(feature = "pack")]
 fn generate_structure_info(input: &DeriveInput) -> String {
     let mut info = String::new();
     info.push_str(&format!("type:{}", input.ident));
@@ -362,7 +361,6 @@ fn extract_inner_type_from_option(ty: &Type) -> Option<&Type> {
 /// }
 /// ```
 #[proc_macro_derive(Encode, attributes(senax))]
-#[allow(unused_variables)]
 pub fn derive_encode(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
@@ -609,124 +607,6 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
         Data::Union(_) => unimplemented!("Unions are not supported"),
     };
 
-    // Generate structure information and CRC64 hash for pack format
-    #[cfg(feature = "pack")]
-    let structure_info = generate_structure_info(&input);
-    #[cfg(feature = "pack")]
-    let structure_hash = CRC64.checksum(structure_info.as_bytes());
-
-    // Generate pack implementation for structs and enums (no field IDs for struct fields)
-    #[cfg(feature = "pack")]
-    let pack_fields = match &input.data {
-        Data::Struct(s) => match &s.fields {
-            Fields::Named(fields) => {
-                let field_encode = fields.named.iter().map(|f| {
-                    let field_ident = &f.ident;
-                    quote! {
-                        senax_encoder::Encoder::pack(&self.#field_ident, writer)?;
-                    }
-                });
-                quote! {
-                    // Write structure hash first
-                    writer.put_u64(#structure_hash);
-                    #(#field_encode)*
-                }
-            }
-            Fields::Unnamed(fields) => {
-                let field_encode = fields.unnamed.iter().enumerate().map(|(i, _)| {
-                    let index = syn::Index::from(i);
-                    quote! {
-                        senax_encoder::Encoder::pack(&self.#index, writer)?;
-                    }
-                });
-                quote! {
-                    // Write structure hash first
-                    writer.put_u64(#structure_hash);
-                    #(#field_encode)*
-                }
-            }
-            Fields::Unit => quote! {
-                // Write structure hash first
-                writer.put_u64(#structure_hash);
-            },
-        },
-        Data::Enum(e) => {
-            let mut variant_pack = Vec::new();
-            let mut used_ids_enum_pack = HashSet::new();
-
-            for v in &e.variants {
-                let variant_name_str = v.ident.to_string();
-                let variant_attrs = get_field_attributes(&v.attrs, &variant_name_str);
-                let variant_id = variant_attrs.id;
-
-                if !used_ids_enum_pack.insert(variant_id) {
-                    panic!("Variant ID (0x{:016X}) is duplicated for enum '{}'. Please specify a different ID for variant '{}' using #[senax(id=...)].", variant_id, name, variant_name_str);
-                }
-
-                let variant_ident = &v.ident;
-
-                match &v.fields {
-                    Fields::Named(fields) => {
-                        let field_idents: Vec<_> = fields
-                            .named
-                            .iter()
-                            .map(|f| f.ident.as_ref().unwrap())
-                            .collect();
-                        // For pack, encode fields in order without field IDs
-                        let field_pack = field_idents.iter().map(|field_ident| {
-                            quote! {
-                                senax_encoder::Encoder::pack(#field_ident, writer)?;
-                            }
-                        });
-                        variant_pack.push(quote! {
-                            #name::#variant_ident { #(#field_idents),* } => {
-                                // Write structure hash first
-                                writer.put_u64(#structure_hash);
-                                writer.put_u8(senax_encoder::core::TAG_ENUM_NAMED);
-                                senax_encoder::core::write_field_id_optimized(writer, #variant_id)?;
-                                #(#field_pack)*
-                            }
-                        });
-                    }
-                    Fields::Unnamed(fields) => {
-                        let field_count = fields.unnamed.len();
-                        let field_bindings: Vec<_> = (0..field_count)
-                            .map(|i| Ident::new(&format!("field{}", i), Span::call_site()))
-                            .collect();
-                        let field_bindings_ref = &field_bindings;
-                        variant_pack.push(quote! {
-                            #name::#variant_ident( #(#field_bindings_ref),* ) => {
-                                // Write structure hash first
-                                writer.put_u64(#structure_hash);
-                                writer.put_u8(senax_encoder::core::TAG_ENUM_UNNAMED);
-                                senax_encoder::core::write_field_id_optimized(writer, #variant_id)?;
-                                #(
-                                    senax_encoder::Encoder::pack(&#field_bindings_ref, writer)?;
-                                )*
-                            }
-                        });
-                    }
-                    Fields::Unit => {
-                        variant_pack.push(quote! {
-                            #name::#variant_ident => {
-                                // Write structure hash first
-                                writer.put_u64(#structure_hash);
-                                writer.put_u8(senax_encoder::core::TAG_ENUM);
-                                senax_encoder::core::write_field_id_optimized(writer, #variant_id)?;
-                            }
-                        });
-                    }
-                }
-            }
-            quote! {
-                match self {
-                    #(#variant_pack)*
-                }
-            }
-        }
-        Data::Union(_) => unimplemented!("Unions are not supported"),
-    };
-
     let is_default_impl = match &input.data {
         Data::Enum(_) => {
             if default_variant_checks.is_empty() {
@@ -743,19 +623,6 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
         _ => quote! { false },
     };
 
-    #[cfg(feature = "pack")]
-    let pack_method = quote! {
-        fn pack(&self, writer: &mut bytes::BytesMut) -> senax_encoder::Result<()> {
-            use bytes::{Buf, BufMut};
-            #pack_fields
-            Ok(())
-        }
-    };
-
-    #[cfg(not(feature = "pack"))]
-    let pack_method = quote! {};
-
-    #[cfg(feature = "encode")]
     let encode_method = quote! {
         fn encode(&self, writer: &mut bytes::BytesMut) -> senax_encoder::Result<()> {
             use bytes::{Buf, BufMut};
@@ -768,14 +635,9 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
         }
     };
 
-    #[cfg(not(feature = "encode"))]
-    let encode_method = quote! {};
-
     TokenStream::from(quote! {
         impl #impl_generics senax_encoder::Encoder for #name #ty_generics #where_clause {
             #encode_method
-
-            #pack_method
         }
     })
 }
@@ -808,17 +670,10 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
 /// }
 /// ```
 #[proc_macro_derive(Decode, attributes(senax))]
-#[allow(unused_variables)]
 pub fn derive_decode(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
-
-    // Generate structure information and CRC64 hash for pack format validation
-    #[cfg(feature = "pack")]
-    let structure_info = generate_structure_info(&input);
-    #[cfg(feature = "pack")]
-    let structure_hash = CRC64.checksum(structure_info.as_bytes());
 
     let decode_fields = match &input.data {
         Data::Struct(s) => match &s.fields {
@@ -894,7 +749,8 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                         }
                     });
 
-                let struct_assignments = field_idents.iter()
+                let struct_assignments = field_idents
+                    .iter()
                     .zip(field_is_option_flags.iter())
                     .zip(field_attrs_list.iter())
                     .map(|((ident, is_opt_flag), attrs)| {
@@ -915,7 +771,12 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                         } else {
                             quote! {
                                 #ident: field_values.#ident.ok_or_else(||
-                                    senax_encoder::EncoderError::Decode(format!("Required field '{}' not found for struct {}", stringify!(#ident), stringify!(#name)))
+                                    senax_encoder::EncoderError::StructDecode(
+                                        senax_encoder::StructDecodeError::MissingRequiredField {
+                                            field: stringify!(#ident),
+                                            struct_name: stringify!(#name),
+                                        }
+                                    )
                                 )?,
                             }
                         }
@@ -927,7 +788,12 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                     }
                     let tag = reader.get_u8();
                     if tag != senax_encoder::core::TAG_STRUCT_NAMED {
-                        return Err(senax_encoder::EncoderError::Decode(format!("Expected struct named tag ({}), got {}", senax_encoder::core::TAG_STRUCT_NAMED, tag)));
+                        return Err(senax_encoder::EncoderError::StructDecode(
+                            senax_encoder::StructDecodeError::InvalidTag {
+                                expected: senax_encoder::core::TAG_STRUCT_NAMED,
+                                actual: tag,
+                            }
+                        ));
                     }
 
                     #[derive(Default)]
@@ -955,7 +821,7 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
             }
             Fields::Unnamed(fields) => {
                 let field_count = fields.unnamed.len();
-                let field_deencode = fields.unnamed.iter().map(|f| {
+                let field_decode = fields.unnamed.iter().map(|f| {
                     let field_ty = &f.ty;
                     quote! {
                         <#field_ty as senax_encoder::Decoder>::decode(reader)?
@@ -967,14 +833,25 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                     }
                     let tag = reader.get_u8();
                     if tag != senax_encoder::core::TAG_STRUCT_UNNAMED {
-                        return Err(senax_encoder::EncoderError::Decode(format!("Expected struct unnamed tag ({}), got {}", senax_encoder::core::TAG_STRUCT_UNNAMED, tag)));
+                        return Err(senax_encoder::EncoderError::StructDecode(
+                            senax_encoder::StructDecodeError::InvalidTag {
+                                expected: senax_encoder::core::TAG_STRUCT_UNNAMED,
+                                actual: tag,
+                            }
+                        ));
                     }
                     let count = <usize as senax_encoder::Decoder>::decode(reader)?;
                     if count != #field_count {
-                        return Err(senax_encoder::EncoderError::Decode(format!("Field count mismatch for struct {}: expected {}, got {}", stringify!(#name), #field_count, count)));
+                        return Err(senax_encoder::EncoderError::StructDecode(
+                            senax_encoder::StructDecodeError::FieldCountMismatch {
+                                struct_name: stringify!(#name),
+                                expected: #field_count,
+                                actual: count,
+                            }
+                        ));
                     }
                     Ok(#name(
-                        #(#field_deencode),*
+                        #(#field_decode),*
                     ))
                 }
             }
@@ -984,7 +861,12 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                 }
                 let tag = reader.get_u8();
                 if tag != senax_encoder::core::TAG_STRUCT_UNIT {
-                    return Err(senax_encoder::EncoderError::Decode(format!("Expected struct unit tag ({}), got {}", senax_encoder::core::TAG_STRUCT_UNIT, tag)));
+                    return Err(senax_encoder::EncoderError::StructDecode(
+                        senax_encoder::StructDecodeError::InvalidTag {
+                            expected: senax_encoder::core::TAG_STRUCT_UNIT,
+                            actual: tag,
+                        }
+                    ));
                 }
                 Ok(#name)
             },
@@ -1074,7 +956,15 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                                 });
                             } else {
                                 struct_assignments_enum_named.push(quote! {
-                                    #ident: field_values.#ident.ok_or_else(|| senax_encoder::EncoderError::Decode(format!("Required field '{}' not found for variant {}::{}", stringify!(#ident), stringify!(#name), stringify!(#variant_ident))))?,
+                                    #ident: field_values.#ident.ok_or_else(||
+                                        senax_encoder::EncoderError::EnumDecode(
+                                            senax_encoder::EnumDecodeError::MissingRequiredField {
+                                                field: stringify!(#ident),
+                                                enum_name: stringify!(#name),
+                                                variant_name: stringify!(#variant_ident),
+                                            }
+                                        )
+                                    )?,
                                 });
                             }
                         }
@@ -1107,7 +997,14 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                             x if x == #variant_id => {
                                 let count = <usize as senax_encoder::Decoder>::decode(reader)?;
                                 if count != #field_count {
-                                    return Err(senax_encoder::EncoderError::Decode(format!("Field count mismatch for variant {}::{}: expected {}, got {}", stringify!(#name), stringify!(#variant_ident), #field_count, count)));
+                                    return Err(senax_encoder::EncoderError::EnumDecode(
+                                        senax_encoder::EnumDecodeError::FieldCountMismatch {
+                                            enum_name: stringify!(#name),
+                                            variant_name: stringify!(#variant_ident),
+                                            expected: #field_count,
+                                            actual: count,
+                                        }
+                                    ));
                                 }
                                 Ok(#name::#variant_ident(
                                     #(
@@ -1136,32 +1033,237 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                         let variant_id = senax_encoder::core::read_field_id_optimized(reader)?;
                         match variant_id {
                             #(#unit_variant_arms)*
-                            _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown unit variant ID: 0x{:016X} for enum {}", variant_id, stringify!(#name))))
+                            _ => Err(senax_encoder::EncoderError::EnumDecode(
+                                senax_encoder::EnumDecodeError::UnknownVariantId {
+                                    variant_id,
+                                    enum_name: stringify!(#name),
+                                }
+                            ))
                         }
                     }
                     senax_encoder::core::TAG_ENUM_NAMED => {
                         let variant_id = senax_encoder::core::read_field_id_optimized(reader)?;
                         match variant_id {
                             #(#named_variant_arms)*
-                            _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown named variant ID: 0x{:016X} for enum {}", variant_id, stringify!(#name))))
+                            _ => Err(senax_encoder::EncoderError::EnumDecode(
+                                senax_encoder::EnumDecodeError::UnknownVariantId {
+                                    variant_id,
+                                    enum_name: stringify!(#name),
+                                }
+                            ))
                         }
                     }
                     senax_encoder::core::TAG_ENUM_UNNAMED => {
                         let variant_id = senax_encoder::core::read_field_id_optimized(reader)?;
                         match variant_id {
                              #(#unnamed_variant_arms)*
-                            _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown unnamed variant ID: 0x{:016X} for enum {}", variant_id, stringify!(#name))))
+                            _ => Err(senax_encoder::EncoderError::EnumDecode(
+                                senax_encoder::EnumDecodeError::UnknownVariantId {
+                                    variant_id,
+                                    enum_name: stringify!(#name),
+                                }
+                            ))
                         }
                     }
-                    unknown_tag => Err(senax_encoder::EncoderError::Decode(format!("Unknown enum tag: {} for enum {}", unknown_tag, stringify!(#name))))
+                    unknown_tag => Err(senax_encoder::EncoderError::EnumDecode(
+                        senax_encoder::EnumDecodeError::UnknownTag {
+                            tag: unknown_tag,
+                            enum_name: stringify!(#name),
+                        }
+                    ))
                 }
             }
         }
         Data::Union(_) => unimplemented!("Unions are not supported"),
     };
 
+    let decode_method = quote! {
+        fn decode(reader: &mut bytes::Bytes) -> senax_encoder::Result<Self> {
+            use bytes::{Buf, BufMut};
+            #decode_fields
+        }
+    };
+
+    TokenStream::from(quote! {
+        impl #impl_generics senax_encoder::Decoder for #name #ty_generics #where_clause {
+            #decode_method
+        }
+    })
+}
+
+/// Derive macro for implementing the `Pack` trait (Packer only)
+///
+/// This procedural macro automatically generates an implementation of the `Packer` trait
+/// for structs and enums. It provides compact serialization without field IDs for structs.
+///
+/// # Examples
+///
+/// ```rust
+/// #[derive(Pack)]
+/// struct MyStruct {
+///     field1: i32,
+///     field2: String,
+/// }
+/// ```
+#[proc_macro_derive(Pack, attributes(senax))]
+pub fn derive_pack(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    // Generate structure information and CRC64 hash for pack format
+    let structure_info = generate_structure_info(&input);
+    let structure_hash = CRC64.checksum(structure_info.as_bytes());
+
+    // Generate pack implementation for structs and enums (no field IDs for struct fields)
+    let pack_fields = match &input.data {
+        Data::Struct(s) => match &s.fields {
+            Fields::Named(fields) => {
+                let field_encode = fields.named.iter().map(|f| {
+                    let field_ident = &f.ident;
+                    quote! {
+                        senax_encoder::Packer::pack(&self.#field_ident, writer)?;
+                    }
+                });
+                quote! {
+                    // Write structure hash first for named structs
+                    writer.put_u64_le(#structure_hash);
+                    #(#field_encode)*
+                }
+            }
+            Fields::Unnamed(fields) => {
+                let field_count = fields.unnamed.len();
+                let field_encode = fields.unnamed.iter().enumerate().map(|(i, _)| {
+                    let index = syn::Index::from(i);
+                    quote! {
+                        senax_encoder::Packer::pack(&self.#index, writer)?;
+                    }
+                });
+                quote! {
+                    // Write field count for unnamed structs
+                    let count: usize = #field_count;
+                    senax_encoder::Encoder::encode(&count, writer)?;
+                    #(#field_encode)*
+                }
+            }
+            Fields::Unit => quote! {
+                // Unit structs don't need any additional data
+            },
+        },
+        Data::Enum(e) => {
+            let mut variant_pack = Vec::new();
+            let mut used_ids_enum_pack = HashSet::new();
+
+            for v in &e.variants {
+                let variant_name_str = v.ident.to_string();
+                let variant_attrs = get_field_attributes(&v.attrs, &variant_name_str);
+                let variant_id = variant_attrs.id;
+
+                if !used_ids_enum_pack.insert(variant_id) {
+                    panic!("Variant ID (0x{:016X}) is duplicated for enum '{}'. Please specify a different ID for variant '{}' using #[senax(id=...)].", variant_id, name, variant_name_str);
+                }
+
+                let variant_ident = &v.ident;
+
+                match &v.fields {
+                    Fields::Named(fields) => {
+                        let field_idents: Vec<_> = fields
+                            .named
+                            .iter()
+                            .map(|f| f.ident.as_ref().unwrap())
+                            .collect();
+                        // For pack, encode fields in order without field IDs
+                        let field_pack = field_idents.iter().map(|field_ident| {
+                            quote! {
+                                senax_encoder::Packer::pack(#field_ident, writer)?;
+                            }
+                        });
+                        variant_pack.push(quote! {
+                            #name::#variant_ident { #(#field_idents),* } => {
+                                // Write variant ID first, then structure hash for named enums
+                                senax_encoder::core::write_field_id_optimized(writer, #variant_id)?;
+                                writer.put_u64_le(#structure_hash);
+                                #(#field_pack)*
+                            }
+                        });
+                    }
+                    Fields::Unnamed(fields) => {
+                        let field_count = fields.unnamed.len();
+                        let field_bindings: Vec<_> = (0..field_count)
+                            .map(|i| Ident::new(&format!("field{}", i), Span::call_site()))
+                            .collect();
+                        let field_bindings_ref = &field_bindings;
+                        variant_pack.push(quote! {
+                            #name::#variant_ident( #(#field_bindings_ref),* ) => {
+                                // Write variant ID first, then field count for unnamed enums
+                                senax_encoder::core::write_field_id_optimized(writer, #variant_id)?;
+                                let count: usize = #field_count;
+                                senax_encoder::Encoder::encode(&count, writer)?;
+                                #(
+                                    senax_encoder::Packer::pack(&#field_bindings_ref, writer)?;
+                                )*
+                            }
+                        });
+                    }
+                    Fields::Unit => {
+                        variant_pack.push(quote! {
+                            #name::#variant_ident => {
+                                // Unit enums only need variant ID
+                                senax_encoder::core::write_field_id_optimized(writer, #variant_id)?;
+                            }
+                        });
+                    }
+                }
+            }
+            quote! {
+                match self {
+                    #(#variant_pack)*
+                }
+            }
+        }
+        Data::Union(_) => unimplemented!("Unions are not supported"),
+    };
+
+    let pack_method = quote! {
+        fn pack(&self, writer: &mut bytes::BytesMut) -> senax_encoder::Result<()> {
+            use bytes::{Buf, BufMut};
+            #pack_fields
+            Ok(())
+        }
+    };
+
+    TokenStream::from(quote! {
+        impl #impl_generics senax_encoder::Packer for #name #ty_generics #where_clause {
+            #pack_method
+        }
+    })
+}
+
+/// Derive macro for implementing the `Unpack` trait (Unpacker only)
+///
+/// This procedural macro automatically generates an implementation of the `Unpacker` trait
+/// for structs and enums. It provides compact deserialization that matches the Pack format.
+///
+/// # Examples
+///
+/// ```rust
+/// #[derive(Unpack)]
+/// struct MyStruct {
+///     field1: i32,
+///     field2: String,
+/// }
+/// ```
+#[proc_macro_derive(Unpack, attributes(senax))]
+pub fn derive_unpack(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    // Generate structure information and CRC64 hash for pack format validation
+    let structure_info = generate_structure_info(&input);
+    let structure_hash = CRC64.checksum(structure_info.as_bytes());
+
     // Generate unpack implementation for structs and enums (no field IDs for struct fields)
-    #[cfg(feature = "pack")]
     let unpack_fields = match &input.data {
         Data::Struct(s) => match &s.fields {
             Fields::Named(fields) => {
@@ -1169,87 +1271,72 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                     let field_ident = &f.ident;
                     let field_ty = &f.ty;
                     quote! {
-                        #field_ident: <#field_ty as senax_encoder::Decoder>::unpack(reader)?,
+                        #field_ident: <#field_ty as senax_encoder::Unpacker>::unpack(reader)?,
                     }
                 });
                 quote! {
-                    // Read and validate structure hash
+                    // Read and validate structure hash for named structs
                     if reader.remaining() < 8 {
                         return Err(senax_encoder::EncoderError::InsufficientData);
                     }
-                    let received_hash = reader.get_u64();
-                    let expected_hash = #structure_hash;
-                    if received_hash != expected_hash {
-                        return Err(senax_encoder::EncoderError::Decode(format!(
-                            "Structure hash mismatch for {}: expected 0x{:016X}, got 0x{:016X}",
-                            stringify!(#name), expected_hash, received_hash
-                        )));
+                    let received_hash = reader.get_u64_le();
+                    if received_hash != #structure_hash {
+                        return Err(senax_encoder::EncoderError::StructDecode(
+                            senax_encoder::StructDecodeError::StructureHashMismatch {
+                                struct_name: stringify!(#name),
+                                expected: #structure_hash,
+                                actual: received_hash,
+                            }
+                        ));
                     }
-                    
+
                     Ok(#name {
                         #(#field_assignments)*
                     })
                 }
             }
             Fields::Unnamed(fields) => {
+                let expected_field_count = fields.unnamed.len();
                 let field_decode = fields.unnamed.iter().map(|f| {
                     let field_ty = &f.ty;
                     quote! {
-                        <#field_ty as senax_encoder::Decoder>::unpack(reader)?
+                        <#field_ty as senax_encoder::Unpacker>::unpack(reader)?
                     }
                 });
                 quote! {
-                    // Read and validate structure hash
-                    if reader.remaining() < 8 {
-                        return Err(senax_encoder::EncoderError::InsufficientData);
+                    // Read and validate field count for unnamed structs
+                    let field_count = <usize as senax_encoder::Decoder>::decode(reader)?;
+                    if field_count != #expected_field_count {
+                        return Err(senax_encoder::EncoderError::StructDecode(
+                            senax_encoder::StructDecodeError::FieldCountMismatch {
+                                struct_name: stringify!(#name),
+                                expected: #expected_field_count,
+                                actual: field_count,
+                            }
+                        ));
                     }
-                    let received_hash = reader.get_u64();
-                    let expected_hash = #structure_hash;
-                    if received_hash != expected_hash {
-                        return Err(senax_encoder::EncoderError::Decode(format!(
-                            "Structure hash mismatch for {}: expected 0x{:016X}, got 0x{:016X}",
-                            stringify!(#name), expected_hash, received_hash
-                        )));
-                    }
-                    
+
                     Ok(#name(
                         #(#field_decode),*
                     ))
                 }
             }
             Fields::Unit => quote! {
-                // Read and validate structure hash
-                if reader.remaining() < 8 {
-                    return Err(senax_encoder::EncoderError::InsufficientData);
-                }
-                let received_hash = reader.get_u64();
-                let expected_hash = #structure_hash;
-                if received_hash != expected_hash {
-                    return Err(senax_encoder::EncoderError::Decode(format!(
-                        "Structure hash mismatch for {}: expected 0x{:016X}, got 0x{:016X}",
-                        stringify!(#name), expected_hash, received_hash
-                    )));
-                }
-                
+                // Unit structs don't need any additional data
                 Ok(#name)
             },
         },
         Data::Enum(e) => {
-            let mut unit_variant_arms_unpack = Vec::new();
-            let mut named_variant_arms_unpack = Vec::new();
-            let mut unnamed_variant_arms_unpack = Vec::new();
-            let mut used_ids_enum_unpack = HashMap::new();
+            let mut variant_unpack = Vec::new();
+            let mut used_ids_enum_unpack = HashSet::new();
 
             for v in &e.variants {
                 let variant_name_str = v.ident.to_string();
                 let variant_attrs = get_field_attributes(&v.attrs, &variant_name_str);
                 let variant_id = variant_attrs.id;
 
-                if let Some(dup_variant) =
-                    used_ids_enum_unpack.insert(variant_id, variant_name_str.clone())
-                {
-                    panic!("Variant ID (0x{:016X}) is duplicated for enum '{}'. Please specify a different ID for variant '{}' and '{}' using #[senax(id=...)].", 
-                          variant_id, name, dup_variant, variant_name_str);
+                if !used_ids_enum_unpack.insert(variant_id) {
+                    panic!("Variant ID (0x{:016X}) is duplicated for enum '{}'. Please specify a different ID for variant '{}' using #[senax(id=...)].", variant_id, name, variant_name_str);
                 }
 
                 let variant_ident = &v.ident;
@@ -1270,30 +1357,58 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                                 .zip(field_types.iter())
                                 .map(|(ident, ty)| {
                                     quote! {
-                                        #ident: <#ty as senax_encoder::Decoder>::unpack(reader)?,
+                                        #ident: <#ty as senax_encoder::Unpacker>::unpack(reader)?,
                                     }
                                 });
 
-                        named_variant_arms_unpack.push(quote! {
+                        variant_unpack.push(quote! {
                             x if x == #variant_id => {
+                                // Read and validate structure hash for named variants
+                                if reader.remaining() < 8 {
+                                    return Err(senax_encoder::EncoderError::InsufficientData);
+                                }
+                                let received_hash = reader.get_u64_le();
+                                if received_hash != #structure_hash {
+                                    return Err(senax_encoder::EncoderError::EnumDecode(
+                                        senax_encoder::EnumDecodeError::StructureHashMismatch {
+                                            enum_name: stringify!(#name),
+                                            variant_name: stringify!(#variant_ident),
+                                            expected: #structure_hash,
+                                            actual: received_hash,
+                                        }
+                                    ));
+                                }
                                 Ok(#name::#variant_ident { #(#field_assignments)* })
                             }
                         });
                     }
                     Fields::Unnamed(fields) => {
                         let field_types: Vec<_> = fields.unnamed.iter().map(|f| &f.ty).collect();
-                        unnamed_variant_arms_unpack.push(quote! {
+                        let expected_field_count = field_types.len();
+                        variant_unpack.push(quote! {
                             x if x == #variant_id => {
+                                // Read and validate field count for unnamed variants
+                                let field_count = <usize as senax_encoder::Decoder>::decode(reader)?;
+                                if field_count != #expected_field_count {
+                                    return Err(senax_encoder::EncoderError::EnumDecode(
+                                        senax_encoder::EnumDecodeError::FieldCountMismatch {
+                                            enum_name: stringify!(#name),
+                                            variant_name: stringify!(#variant_ident),
+                                            expected: #expected_field_count,
+                                            actual: field_count,
+                                        }
+                                    ));
+                                }
                                 Ok(#name::#variant_ident(
                                     #(
-                                        <#field_types as senax_encoder::Decoder>::unpack(reader)?,
+                                        <#field_types as senax_encoder::Unpacker>::unpack(reader)?,
                                     )*
                                 ))
                             }
                         });
                     }
                     Fields::Unit => {
-                        unit_variant_arms_unpack.push(quote! {
+                        variant_unpack.push(quote! {
                             x if x == #variant_id => {
                                 Ok(#name::#variant_ident)
                             }
@@ -1301,54 +1416,24 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
                     }
                 }
             }
+
+            // Now we can support mixed variants since variant ID comes first
             quote! {
-                // Read and validate structure hash
-                if reader.remaining() < 8 {
-                    return Err(senax_encoder::EncoderError::InsufficientData);
-                }
-                let received_hash = reader.get_u64();
-                let expected_hash = #structure_hash;
-                if received_hash != expected_hash {
-                    return Err(senax_encoder::EncoderError::Decode(format!(
-                        "Structure hash mismatch for {}: expected 0x{:016X}, got 0x{:016X}",
-                        stringify!(#name), expected_hash, received_hash
-                    )));
-                }
-                
-                if reader.remaining() == 0 {
-                    return Err(senax_encoder::EncoderError::InsufficientData);
-                }
-                let tag = reader.get_u8();
-                match tag {
-                    senax_encoder::core::TAG_ENUM => {
-                        let variant_id = senax_encoder::core::read_field_id_optimized(reader)?;
-                        match variant_id {
-                            #(#unit_variant_arms_unpack)*
-                            _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown unit variant ID: 0x{:016X} for enum {}", variant_id, stringify!(#name))))
+                let variant_id = senax_encoder::core::read_field_id_optimized(reader)?;
+                match variant_id {
+                    #(#variant_unpack)*
+                    _ => Err(senax_encoder::EncoderError::EnumDecode(
+                        senax_encoder::EnumDecodeError::UnknownVariantId {
+                            variant_id,
+                            enum_name: stringify!(#name),
                         }
-                    }
-                    senax_encoder::core::TAG_ENUM_NAMED => {
-                        let variant_id = senax_encoder::core::read_field_id_optimized(reader)?;
-                        match variant_id {
-                            #(#named_variant_arms_unpack)*
-                            _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown named variant ID: 0x{:016X} for enum {}", variant_id, stringify!(#name))))
-                        }
-                    }
-                    senax_encoder::core::TAG_ENUM_UNNAMED => {
-                        let variant_id = senax_encoder::core::read_field_id_optimized(reader)?;
-                        match variant_id {
-                             #(#unnamed_variant_arms_unpack)*
-                            _ => Err(senax_encoder::EncoderError::Decode(format!("Unknown unnamed variant ID: 0x{:016X} for enum {}", variant_id, stringify!(#name))))
-                        }
-                    }
-                    unknown_tag => Err(senax_encoder::EncoderError::Decode(format!("Unknown enum tag: {} for enum {}", unknown_tag, stringify!(#name))))
+                    ))
                 }
             }
         }
         Data::Union(_) => unimplemented!("Unions are not supported"),
     };
 
-    #[cfg(feature = "pack")]
     let unpack_method = quote! {
         fn unpack(reader: &mut bytes::Bytes) -> senax_encoder::Result<Self> {
             use bytes::{Buf, BufMut};
@@ -1356,24 +1441,8 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
         }
     };
 
-    #[cfg(not(feature = "pack"))]
-    let unpack_method = quote! {};
-
-    #[cfg(feature = "encode")]
-    let decode_method = quote! {
-        fn decode(reader: &mut bytes::Bytes) -> senax_encoder::Result<Self> {
-            use bytes::{Buf, BufMut};
-            #decode_fields
-        }
-    };
-
-    #[cfg(not(feature = "encode"))]
-    let decode_method = quote! {};
-
     TokenStream::from(quote! {
-        impl #impl_generics senax_encoder::Decoder for #name #ty_generics #where_clause {
-            #decode_method
-
+        impl #impl_generics senax_encoder::Unpacker for #name #ty_generics #where_clause {
             #unpack_method
         }
     })

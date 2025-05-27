@@ -32,11 +32,6 @@ You can control encoding/decoding behavior using the following attributes:
 
 The following optional features enable support for popular crates and types:
 
-### Core Features
-- `encode` — Enables the `encode()`/`decode()` functions and methods with schema evolution support (field IDs, type tags). Default enabled.
-- `pack` — Enables the `pack()`/`unpack()` functions and methods for compact encoding without schema evolution support.
-- `vec_u8` — Optimizes `Vec<u8>` encoding to use the same binary tag as `Bytes` for better compatibility and smaller size. When enabled, `Vec<u8>` and `Bytes` are interchangeable in the binary format. Default enabled.
-
 ### External Crate Support
 - `chrono` — Enables encoding/decoding of `chrono::DateTime`, `NaiveDate`, and `NaiveTime` types.
 - `uuid` — Enables encoding/decoding of `uuid::Uuid`.

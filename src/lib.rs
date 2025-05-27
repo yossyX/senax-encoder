@@ -22,11 +22,6 @@
 //!
 //! The following optional features enable support for popular crates and types:
 //!
-//! ### Core Features
-//! - `encode` — Enables the `encode()`/`decode()` functions and methods with schema evolution support (field IDs, type tags). Default enabled.
-//! - `pack` — Enables the `pack()`/`unpack()` functions and methods for compact encoding without schema evolution support.
-//! - `vec_u8` — Optimizes `Vec<u8>` encoding to use the same binary tag as `Bytes` for better compatibility and smaller size. When enabled, `Vec<u8>` and `Bytes` are interchangeable in the binary format. Default enabled.
-//!
 //! ### External Crate Support
 //! - `chrono` — Enables encoding/decoding of `chrono::DateTime`, `NaiveDate`, and `NaiveTime` types.
 //! - `uuid` — Enables encoding/decoding of `uuid::Uuid`.
@@ -38,22 +33,17 @@
 //! - `smol_str` — Enables encoding/decoding of `smol_str::SmolStr` (small string optimization).
 //! - `serde_json` — Enables encoding/decoding of `serde_json::Value` (JSON values as dynamic type).
 
-
 pub mod core;
 mod features;
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-pub use senax_encoder_derive::{Decode, Encode};
+pub use senax_encoder_derive::{Decode, Encode, Pack, Unpack};
 use std::collections::HashMap;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
-use thiserror::Error;
 
-/// Error type for all encoding and decoding operations in this crate.
-///
-/// This error type is returned by all `Encode` and `Decode` trait methods.
-/// It covers I/O errors, encoding/decoding logic errors, and buffer underflow.
-#[derive(Debug, Error)]
+/// Errors that can occur during encoding or decoding operations.
+#[derive(Debug, thiserror::Error)]
 pub enum EncoderError {
     /// The value could not be encoded (e.g., unsupported type or logic error).
     #[error("Encode error: {0}")]
@@ -64,12 +54,89 @@ pub enum EncoderError {
     /// The buffer did not contain enough data to complete the operation.
     #[error("Insufficient data in buffer")]
     InsufficientData,
+    /// Struct-specific decode error
+    #[error(transparent)]
+    StructDecode(#[from] StructDecodeError),
+    /// Enum-specific decode error
+    #[error(transparent)]
+    EnumDecode(#[from] EnumDecodeError),
 }
 
 /// The result type used throughout this crate for encode/decode operations.
 ///
 /// All `Encode` and `Decode` trait methods return this type.
 pub type Result<T> = std::result::Result<T, EncoderError>;
+
+/// Derive-specific error types for struct operations
+#[derive(Debug, thiserror::Error)]
+pub enum StructDecodeError {
+    #[error("Expected struct named tag ({expected}), got {actual}")]
+    InvalidTag { expected: u8, actual: u8 },
+    #[error("Required field '{field}' not found for struct {struct_name}")]
+    MissingRequiredField {
+        field: &'static str,
+        struct_name: &'static str,
+    },
+    #[error("Field count mismatch for struct {struct_name}: expected {expected}, got {actual}")]
+    FieldCountMismatch {
+        struct_name: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+    #[error("Structure hash mismatch for {struct_name}: expected 0x{expected:016X}, got 0x{actual:016X}")]
+    StructureHashMismatch {
+        struct_name: &'static str,
+        expected: u64,
+        actual: u64,
+    },
+}
+
+/// Derive-specific error types for enum operations
+#[derive(Debug, thiserror::Error)]
+pub enum EnumDecodeError {
+    #[error("Unknown enum tag: {tag} for enum {enum_name}")]
+    UnknownTag { tag: u8, enum_name: &'static str },
+    #[error("Unknown variant ID: 0x{variant_id:016X} for enum {enum_name}")]
+    UnknownVariantId {
+        variant_id: u64,
+        enum_name: &'static str,
+    },
+    #[error("Unknown unit variant ID: 0x{variant_id:016X} for enum {enum_name}")]
+    UnknownUnitVariantId {
+        variant_id: u64,
+        enum_name: &'static str,
+    },
+    #[error("Unknown named variant ID: 0x{variant_id:016X} for enum {enum_name}")]
+    UnknownNamedVariantId {
+        variant_id: u64,
+        enum_name: &'static str,
+    },
+    #[error("Unknown unnamed variant ID: 0x{variant_id:016X} for enum {enum_name}")]
+    UnknownUnnamedVariantId {
+        variant_id: u64,
+        enum_name: &'static str,
+    },
+    #[error("Required field '{field}' not found for variant {enum_name}::{variant_name}")]
+    MissingRequiredField {
+        field: &'static str,
+        enum_name: &'static str,
+        variant_name: &'static str,
+    },
+    #[error("Field count mismatch for variant {enum_name}::{variant_name}: expected {expected}, got {actual}")]
+    FieldCountMismatch {
+        enum_name: &'static str,
+        variant_name: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+    #[error("Structure hash mismatch for variant {enum_name}::{variant_name}: expected 0x{expected:016X}, got 0x{actual:016X}")]
+    StructureHashMismatch {
+        enum_name: &'static str,
+        variant_name: &'static str,
+        expected: u64,
+        actual: u64,
+    },
+}
 
 /// Convenience function to decode a value from bytes.
 ///
@@ -94,7 +161,6 @@ pub type Result<T> = std::result::Result<T, EncoderError>;
 /// let decoded: MyStruct = decode(&mut buf).unwrap();
 /// assert_eq!(value, decoded);
 /// ```
-#[cfg(feature = "encode")]
 pub fn decode<T: Decoder>(reader: &mut Bytes) -> Result<T> {
     T::decode(reader)
 }
@@ -123,7 +189,6 @@ pub fn decode<T: Decoder>(reader: &mut Bytes) -> Result<T> {
 /// let decoded: MyStruct = decode(&mut buf).unwrap();
 /// assert_eq!(value, decoded);
 /// ```
-#[cfg(feature = "encode")]
 pub fn encode<T: Encoder>(value: &T) -> Result<Bytes> {
     let mut writer = BytesMut::new();
     value.encode(&mut writer)?;
@@ -145,29 +210,29 @@ pub trait Encoder {
     ///
     /// # Arguments
     /// * `writer` - The buffer to write the encoded bytes into.
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()>;
-
-    /// Pack the value into the given buffer without schema evolution support.
-    ///
-    /// This method omits field IDs and some type tags for compact encoding.
-    /// Fields are encoded in declaration order. Use this when you need
-    /// maximum performance and compact size, but don't need schema evolution.
-    ///
-    /// # Arguments
-    /// * `writer` - The buffer to write the packed bytes into.
-    ///
-    /// # Note
-    /// - For structs: Field IDs are omitted, fields are encoded in declaration order
-    /// - For enums: Variant IDs are still included, but field IDs within variants are omitted
-    /// - For primitives: Some type tags may be omitted for maximum compactness
-    #[cfg(feature = "pack")]
-    fn pack(&self, writer: &mut BytesMut) -> Result<()>;
 
     /// Returns true if this value equals its default value.
     /// Used by `#[senax(skip_default)]` attribute to skip encoding default values.
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool;
+}
+
+/// Trait for types that can be packed into a compact binary format.
+///
+/// This trait provides compact serialization without schema evolution support.
+/// Use this when you need maximum performance and don't require forward/backward compatibility.
+///
+/// # Errors
+/// Returns `EncoderError` if the value cannot be packed.
+pub trait Packer {
+    /// Pack the value into the given buffer without schema evolution support.
+    ///
+    /// This method stores data in a compact format without field IDs or type tags.
+    /// The format is not schema-evolution-friendly but offers better performance.
+    ///
+    /// # Arguments
+    /// * `writer` - The buffer to write the packed bytes into.
+    fn pack(&self, writer: &mut BytesMut) -> Result<()>;
 }
 
 /// Trait for types that can be decoded from the senax binary format.
@@ -185,40 +250,41 @@ pub trait Decoder: Sized {
     ///
     /// # Arguments
     /// * `reader` - The buffer to read the encoded bytes from.
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self>;
+}
 
+/// Trait for types that can be unpacked from a compact binary format.
+///
+/// This trait provides compact deserialization without schema evolution support.
+/// Use this when you need maximum performance and don't require forward/backward compatibility.
+///
+/// # Errors
+/// Returns `EncoderError` if the value cannot be unpacked or the data is invalid.
+pub trait Unpacker: Sized {
     /// Unpack the value from the given buffer without schema evolution support.
     ///
-    /// This method expects data packed without field IDs and some type tags.
-    /// Fields are decoded in declaration order. Use this when you need
-    /// maximum performance and the data was packed with `pack()`.
+    /// This method reads data from a compact format without field IDs or type tags.
+    /// The format is not schema-evolution-friendly but offers better performance.
     ///
     /// # Arguments
     /// * `reader` - The buffer to read the packed bytes from.
-    ///
-    /// # Note
-    /// - For structs: Field IDs are not expected, fields are decoded in declaration order
-    /// - For enums: Variant IDs are still expected, but field IDs within variants are not
-    /// - For primitives: Some type tags may be omitted, with relaxed validation
-    #[cfg(feature = "pack")]
     fn unpack(reader: &mut Bytes) -> Result<Self>;
 }
 
 /// Convenience function to pack a value to bytes.
 ///
 /// This is equivalent to calling `value.pack(writer)` but provides a more ergonomic API.
-/// Unlike `encode`, this does not store field IDs and is not schema-evolution-friendly.
+/// The packed format is compact but not schema-evolution-friendly.
 ///
 /// # Arguments
 /// * `value` - The value to pack.
 ///
 /// # Example
 /// ```rust
-/// use senax_encoder::{pack, unpack, Encode, Decode};
+/// use senax_encoder::{pack, unpack, Pack, Unpack};
 /// use bytes::BytesMut;
 ///
-/// #[derive(Encode, Decode, PartialEq, Debug)]
+/// #[derive(Pack, Unpack, PartialEq, Debug)]
 /// struct MyStruct {
 ///     id: u32,
 ///     name: String,
@@ -229,8 +295,7 @@ pub trait Decoder: Sized {
 /// let decoded: MyStruct = unpack(&mut buf).unwrap();
 /// assert_eq!(value, decoded);
 /// ```
-#[cfg(feature = "pack")]
-pub fn pack<T: Encoder>(value: &T) -> Result<Bytes> {
+pub fn pack<T: Packer>(value: &T) -> Result<Bytes> {
     let mut writer = BytesMut::new();
     value.pack(&mut writer)?;
     Ok(writer.freeze())
@@ -239,17 +304,17 @@ pub fn pack<T: Encoder>(value: &T) -> Result<Bytes> {
 /// Convenience function to unpack a value from bytes.
 ///
 /// This is equivalent to calling `T::unpack(reader)` but provides a more ergonomic API.
-/// Unlike `decode`, this does not expect field IDs and is not schema-evolution-friendly.
+/// The packed format is compact but not schema-evolution-friendly.
 ///
 /// # Arguments
 /// * `reader` - The buffer to read the packed bytes from.
 ///
 /// # Example
 /// ```rust
-/// use senax_encoder::{pack, unpack, Encode, Decode};
+/// use senax_encoder::{pack, unpack, Pack, Unpack};
 /// use bytes::BytesMut;
 ///
-/// #[derive(Encode, Decode, PartialEq, Debug)]
+/// #[derive(Pack, Unpack, PartialEq, Debug)]
 /// struct MyStruct {
 ///     id: u32,
 ///     name: String,
@@ -260,7 +325,6 @@ pub fn pack<T: Encoder>(value: &T) -> Result<Bytes> {
 /// let decoded: MyStruct = unpack(&mut buf).unwrap();
 /// assert_eq!(value, decoded);
 /// ```
-#[cfg(feature = "pack")]
-pub fn unpack<T: Decoder>(reader: &mut Bytes) -> Result<T> {
+pub fn unpack<T: Unpacker>(reader: &mut Bytes) -> Result<T> {
     T::unpack(reader)
 }

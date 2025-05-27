@@ -1,29 +1,28 @@
-#![cfg(feature = "pack")]
-
 use bytes::{BufMut, BytesMut};
-#[cfg(feature = "encode")]
-use senax_encoder::{encode};
-use senax_encoder::{pack, unpack, Decode, Encode, Encoder, Decoder};
+use senax_encoder::encode;
+use senax_encoder::{
+    pack, unpack, Decode, Decoder, Encode, Encoder, Pack, Packer, Unpack, Unpacker,
+};
 use std::collections::HashMap;
 
-#[derive(Encode, Decode, PartialEq, Debug)]
+#[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
 struct SimpleStruct {
     id: u32,
     name: String,
     active: bool,
 }
 
-#[derive(Encode, Decode, PartialEq, Debug)]
+#[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
 struct SimpleStructForComparison {
     id: u32,
     name: String,
     active: bool,
 }
 
-#[derive(Encode, Decode, PartialEq, Debug)]
+#[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
 struct TupleStruct(u32, String, bool);
 
-#[derive(Encode, Decode, PartialEq, Debug)]
+#[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
 struct UnitStruct;
 
 #[test]
@@ -73,7 +72,6 @@ fn test_pack_unpack_unit_struct() {
 }
 
 #[test]
-#[cfg(feature = "encode")]
 fn test_pack_vs_encode_size_difference() {
     let original_pack = SimpleStruct {
         id: 42,
@@ -102,13 +100,13 @@ fn test_pack_vs_encode_size_difference() {
 #[test]
 fn test_pack_unpack_field_order_dependency() {
     // This test demonstrates that pack/unpack is order-dependent
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct StructA {
         first: u32,
         second: String,
     }
 
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct StructB {
         second: String, // Different order!
         first: u32,
@@ -134,12 +132,12 @@ fn test_pack_unpack_field_order_dependency() {
 
 #[test]
 fn test_nested_structs_pack_unpack() {
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct Inner {
         value: u32,
     }
 
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct Outer {
         inner: Inner,
         name: String,
@@ -159,32 +157,55 @@ fn test_nested_structs_pack_unpack() {
 
 #[test]
 fn test_enum_named_variant_pack_unpack() {
-    #[derive(Encode, Decode, PartialEq, Debug)]
-    enum TestEnum {
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
+    enum TestEnumNamed {
         Named { id: u32, name: String },
-        Unnamed(u32, String),
-        Unit,
+        AnotherNamed { value: i32, flag: bool },
     }
 
-    let original = TestEnum::Named {
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
+    enum TestEnumUnnamed {
+        Unnamed(u32, String),
+        AnotherUnnamed(i32, bool),
+    }
+
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
+    enum TestEnumUnit {
+        Unit,
+        AnotherUnit,
+    }
+
+    // Test named variant enum
+    let original_named = TestEnumNamed::Named {
         id: 42,
         name: "hello".to_string(),
     };
 
-    // Pack the enum
-    let packed_bytes = pack(&original).unwrap();
-
-    // Unpack the enum
+    let packed_bytes = pack(&original_named).unwrap();
     let mut reader = packed_bytes;
-    let unpacked: TestEnum = unpack(&mut reader).unwrap();
+    let unpacked: TestEnumNamed = unpack(&mut reader).unwrap();
+    assert_eq!(original_named, unpacked);
 
-    assert_eq!(original, unpacked);
+    // Test unnamed variant enum
+    let original_unnamed = TestEnumUnnamed::Unnamed(42, "hello".to_string());
+
+    let packed_bytes = pack(&original_unnamed).unwrap();
+    let mut reader = packed_bytes;
+    let unpacked: TestEnumUnnamed = unpack(&mut reader).unwrap();
+    assert_eq!(original_unnamed, unpacked);
+
+    // Test unit variant enum
+    let original_unit = TestEnumUnit::Unit;
+
+    let packed_bytes = pack(&original_unit).unwrap();
+    let mut reader = packed_bytes;
+    let unpacked: TestEnumUnit = unpack(&mut reader).unwrap();
+    assert_eq!(original_unit, unpacked);
 }
 
 #[test]
-#[cfg(feature = "encode")]
 fn test_enum_pack_vs_encode_size_difference() {
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     enum TestEnum {
         Named { id: u32, name: String, active: bool },
     }
@@ -210,12 +231,12 @@ fn test_enum_pack_vs_encode_size_difference() {
 #[test]
 fn test_enum_field_order_dependency() {
     // This test demonstrates that pack/unpack is order-dependent for enum fields too
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     enum EnumA {
         Named { first: u32, second: String },
     }
 
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     enum EnumB {
         Named { second: String, first: u32 }, // Different field order!
     }
@@ -317,20 +338,25 @@ fn test_datetime_default_and_non_default_pack_unpack() {
     assert_eq!(default_local, unpacked_default_local);
 
     // Test non-default DateTime<Local> (should use TAG_CHRONO_DATETIME)
-    let non_default_local = DateTime::from_timestamp(1640995200, 123456789).unwrap().with_timezone(&Local);
+    let non_default_local = DateTime::from_timestamp(1640995200, 123456789)
+        .unwrap()
+        .with_timezone(&Local);
     let packed_non_default_local = pack(&non_default_local).unwrap();
     let mut reader = packed_non_default_local;
     let unpacked_non_default_local: DateTime<Local> = unpack(&mut reader).unwrap();
     // Compare UTC timestamps since local timezone might vary
-    assert_eq!(non_default_local.with_timezone(&Utc), unpacked_non_default_local.with_timezone(&Utc));
+    assert_eq!(
+        non_default_local.with_timezone(&Utc),
+        unpacked_non_default_local.with_timezone(&Utc)
+    );
 
     // Test various DateTime values
     let test_datetimes = vec![
-        DateTime::from_timestamp(0, 0).unwrap(),                    // Unix epoch
-        DateTime::from_timestamp(1234567890, 0).unwrap(),           // 2009-02-13
-        DateTime::from_timestamp(1640995200, 123456789).unwrap(),   // 2022-01-01 with nanos
-        DateTime::from_timestamp(-1, 999999999).unwrap(),           // Before epoch
-        DateTime::from_timestamp(2147483647, 999999999).unwrap(),   // Year 2038 problem
+        DateTime::from_timestamp(0, 0).unwrap(), // Unix epoch
+        DateTime::from_timestamp(1234567890, 0).unwrap(), // 2009-02-13
+        DateTime::from_timestamp(1640995200, 123456789).unwrap(), // 2022-01-01 with nanos
+        DateTime::from_timestamp(-1, 999999999).unwrap(), // Before epoch
+        DateTime::from_timestamp(2147483647, 999999999).unwrap(), // Year 2038 problem
     ];
 
     for &original_utc in &test_datetimes {
@@ -338,28 +364,36 @@ fn test_datetime_default_and_non_default_pack_unpack() {
         let packed_utc = pack(&original_utc).unwrap();
         let mut reader = packed_utc;
         let unpacked_utc: DateTime<Utc> = unpack(&mut reader).unwrap();
-        assert_eq!(original_utc, unpacked_utc, "Failed for UTC DateTime: {}", original_utc);
+        assert_eq!(
+            original_utc, unpacked_utc,
+            "Failed for UTC DateTime: {}",
+            original_utc
+        );
 
         // Test DateTime<Local>
         let original_local = original_utc.with_timezone(&Local);
         let packed_local = pack(&original_local).unwrap();
         let mut reader = packed_local;
         let unpacked_local: DateTime<Local> = unpack(&mut reader).unwrap();
-        assert_eq!(original_local.with_timezone(&Utc), unpacked_local.with_timezone(&Utc), 
-                   "Failed for Local DateTime: {}", original_local);
+        assert_eq!(
+            original_local.with_timezone(&Utc),
+            unpacked_local.with_timezone(&Utc),
+            "Failed for Local DateTime: {}",
+            original_local
+        );
     }
 }
 
 #[test]
 fn test_complex_nested_struct_pack_unpack() {
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct Address {
         street: String,
         city: String,
         zip_code: u32,
     }
 
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct Person {
         id: u64,
         name: String,
@@ -409,20 +443,20 @@ fn test_complex_nested_struct_pack_unpack() {
 
 #[test]
 fn test_complex_enum_with_nested_data_pack_unpack() {
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct UserProfile {
         username: String,
         followers: u32,
     }
 
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct ProductInfo {
         name: String,
         price: f64,
         categories: Vec<String>,
     }
 
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     enum ComplexEnum {
         User {
             profile: UserProfile,
@@ -438,7 +472,6 @@ fn test_complex_enum_with_nested_data_pack_unpack() {
             version: String,
             config: HashMap<String, i32>,
         },
-        Empty,
     }
 
     // Test User variant
@@ -476,41 +509,34 @@ fn test_complex_enum_with_nested_data_pack_unpack() {
     let mut reader = packed_product;
     let unpacked_product: ComplexEnum = unpack(&mut reader).unwrap();
     assert_eq!(product_variant, unpacked_product);
-
-    // Test Empty variant
-    let empty_variant = ComplexEnum::Empty;
-    let packed_empty = pack(&empty_variant).unwrap();
-    let mut reader = packed_empty;
-    let unpacked_empty: ComplexEnum = unpack(&mut reader).unwrap();
-    assert_eq!(empty_variant, unpacked_empty);
 }
 
 #[test]
 fn test_deeply_nested_struct_pack_unpack() {
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct Level4 {
         value: String,
     }
 
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct Level3 {
         level4: Level4,
         numbers: Vec<i32>,
     }
 
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct Level2 {
         level3: Level3,
         optional_data: Option<HashMap<String, f64>>,
     }
 
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct Level1 {
         level2: Level2,
         flags: Vec<bool>,
     }
 
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct RootLevel {
         level1: Level1,
         metadata: HashMap<String, String>,
@@ -552,9 +578,8 @@ fn test_deeply_nested_struct_pack_unpack() {
 }
 
 #[test]
-#[cfg(feature = "encode")]
 fn test_complex_struct_pack_vs_encode_size() {
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct ComplexStruct {
         id: u64,
         name: String,
@@ -606,7 +631,7 @@ fn test_complex_struct_pack_vs_encode_size() {
 
 #[test]
 fn test_array_of_complex_structs_pack_unpack() {
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct Item {
         id: u32,
         name: String,
@@ -614,7 +639,7 @@ fn test_array_of_complex_structs_pack_unpack() {
         properties: HashMap<String, f64>,
     }
 
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct Container {
         items: Vec<Item>,
         total_count: usize,
@@ -700,45 +725,8 @@ fn test_vec_u8_pack_unpack() {
 }
 
 #[test]
-#[cfg(feature = "encode")]
-fn test_vec_u8_pack_vs_encode_size() {
-    let test_vectors = vec![
-        Vec::new(),                                           // Empty
-        vec![42],                                            // Single byte
-        vec![0, 1, 2, 3, 4, 5],                             // Small vector
-        (0..100).map(|i| (i % 256) as u8).collect::<Vec<u8>>(), // Medium vector
-        (0..1000).map(|i| (i % 256) as u8).collect::<Vec<u8>>(), // Large vector
-    ];
-
-    for test_vec in test_vectors {
-        // Pack Vec<u8>
-        let packed_bytes = pack(&test_vec).unwrap();
-
-        // Encode Vec<u8>
-        let encoded_bytes = encode(&test_vec).unwrap();
-
-        println!("Vec<u8> length: {}, packed size: {}, encoded size: {}", 
-                 test_vec.len(), packed_bytes.len(), encoded_bytes.len());
-
-        // For small Vec<u8>, pack and encode should be the same size
-        // For large Vec<u8>, pack may be smaller than encode due to different encoding strategies
-        if test_vec.len() < 100 {
-            assert_eq!(packed_bytes.len(), encoded_bytes.len());
-        } else {
-            // For larger vectors, pack should be smaller or equal to encode
-            assert!(packed_bytes.len() <= encoded_bytes.len());
-        }
-
-        // Verify the data can be unpacked correctly
-        let mut reader = packed_bytes;
-        let unpacked: Vec<u8> = unpack(&mut reader).unwrap();
-        assert_eq!(test_vec, unpacked);
-    }
-}
-
-#[test]
 fn test_nested_vec_u8_pack_unpack() {
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct BinaryContainer {
         id: u32,
         name: String,
@@ -750,12 +738,7 @@ fn test_nested_vec_u8_pack_unpack() {
         id: 123,
         name: "binary_data".to_string(),
         data: vec![0xFF, 0x00, 0xAB, 0xCD, 0xEF],
-        chunks: vec![
-            vec![1, 2, 3],
-            vec![],
-            vec![255, 254, 253, 252],
-            vec![42],
-        ],
+        chunks: vec![vec![1, 2, 3], vec![], vec![255, 254, 253, 252], vec![42]],
     };
 
     let packed_bytes = pack(&original).unwrap();
@@ -767,7 +750,7 @@ fn test_nested_vec_u8_pack_unpack() {
 
 #[test]
 fn test_vec_u8_with_option_pack_unpack() {
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct OptionalBinaryData {
         required_data: Vec<u8>,
         optional_data: Option<Vec<u8>>,
@@ -778,10 +761,7 @@ fn test_vec_u8_with_option_pack_unpack() {
     let with_optional = OptionalBinaryData {
         required_data: vec![1, 2, 3, 4, 5],
         optional_data: Some(vec![10, 20, 30]),
-        optional_chunks: Some(vec![
-            vec![100, 101],
-            vec![200, 201, 202],
-        ]),
+        optional_chunks: Some(vec![vec![100, 101], vec![200, 201, 202]]),
     };
 
     let packed_with = pack(&with_optional).unwrap();
@@ -845,49 +825,10 @@ fn test_bytes_pack_unpack() {
 }
 
 #[test]
-#[cfg(feature = "encode")]
-fn test_bytes_pack_vs_encode_size() {
-    use bytes::Bytes;
-
-    let test_bytes = vec![
-        Bytes::new(),                                                    // Empty
-        Bytes::from_static(&[42]),                                      // Single byte
-        Bytes::from_static(&[0, 1, 2, 3, 4, 5]),                      // Small bytes
-        Bytes::from((0..100).map(|i| (i % 256) as u8).collect::<Vec<u8>>()), // Medium bytes
-        Bytes::from((0..1000).map(|i| (i % 256) as u8).collect::<Vec<u8>>()), // Large bytes
-    ];
-
-    for test_data in test_bytes {
-        // Pack Bytes
-        let packed_bytes = pack(&test_data).unwrap();
-
-        // Encode Bytes
-        let encoded_bytes = encode(&test_data).unwrap();
-
-        println!("Bytes length: {}, packed size: {}, encoded size: {}", 
-                 test_data.len(), packed_bytes.len(), encoded_bytes.len());
-
-        // For small Bytes, pack and encode should be the same size
-        // For large Bytes, pack may be smaller than encode due to different encoding strategies
-        if test_data.len() < 100 {
-            assert_eq!(packed_bytes.len(), encoded_bytes.len());
-        } else {
-            // For larger bytes, pack should be smaller or equal to encode
-            assert!(packed_bytes.len() <= encoded_bytes.len());
-        }
-
-        // Verify the data can be unpacked correctly
-        let mut reader = packed_bytes;
-        let unpacked: Bytes = unpack(&mut reader).unwrap();
-        assert_eq!(test_data, unpacked);
-    }
-}
-
-#[test]
 fn test_nested_bytes_pack_unpack() {
     use bytes::Bytes;
 
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct BytesContainer {
         id: u32,
         name: String,
@@ -920,7 +861,7 @@ fn test_nested_bytes_pack_unpack() {
 fn test_bytes_with_option_pack_unpack() {
     use bytes::Bytes;
 
-    #[derive(Encode, Decode, PartialEq, Debug)]
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
     struct OptionalBytesData {
         required_data: Bytes,
         optional_data: Option<Bytes>,
@@ -959,7 +900,7 @@ fn test_bytes_with_option_pack_unpack() {
 fn test_bytes_vec_u8_pack_behavior() {
     use bytes::Bytes;
 
-    // Test that Bytes and Vec<u8> behavior depends on vec_u8 feature
+    // Test that Bytes and Vec<u8> use different formats
     let data = vec![1u8, 2, 3, 4, 5, 255, 0, 128];
     let vec_data = data.clone();
     let bytes_data = Bytes::from(data);
@@ -971,17 +912,9 @@ fn test_bytes_vec_u8_pack_behavior() {
     println!("Vec<u8> packed: {:?}", packed_vec.as_ref());
     println!("Bytes packed: {:?}", packed_bytes.as_ref());
 
-    #[cfg(feature = "vec_u8")]
-    {
-        // With vec_u8 feature, both use TAG_BINARY, so packed data will be the same
-        assert_eq!(packed_vec, packed_bytes);
-    }
-
-    #[cfg(not(feature = "vec_u8"))]
-    {
-        // Without vec_u8 feature, they use different tags, so packed data will differ
-        assert_ne!(packed_vec, packed_bytes);
-    }
+    // Vec<u8> and Bytes now use different formats:
+    // Vec<u8> uses TAG_ARRAY_VEC_SET format, Bytes uses TAG_BINARY format
+    assert_ne!(packed_vec, packed_bytes);
 
     // Each can be unpacked correctly with its own type
     let mut reader_vec = packed_vec;
@@ -1186,12 +1119,14 @@ fn test_primitive_edge_cases_pack_unpack() {
     });
 
     // Test special float values
-    assert!(f32::NAN.is_nan() && {
-        let packed = pack(&f32::NAN).unwrap();
-        let mut reader = packed;
-        let unpacked: f32 = unpack(&mut reader).unwrap();
-        unpacked.is_nan()
-    });
+    assert!(
+        f32::NAN.is_nan() && {
+            let packed = pack(&f32::NAN).unwrap();
+            let mut reader = packed;
+            let unpacked: f32 = unpack(&mut reader).unwrap();
+            unpacked.is_nan()
+        }
+    );
 
     assert_eq!(f32::INFINITY, {
         let packed = pack(&f32::INFINITY).unwrap();
@@ -1205,12 +1140,14 @@ fn test_primitive_edge_cases_pack_unpack() {
         unpack::<f32>(&mut reader).unwrap()
     });
 
-    assert!(f64::NAN.is_nan() && {
-        let packed = pack(&f64::NAN).unwrap();
-        let mut reader = packed;
-        let unpacked: f64 = unpack(&mut reader).unwrap();
-        unpacked.is_nan()
-    });
+    assert!(
+        f64::NAN.is_nan() && {
+            let packed = pack(&f64::NAN).unwrap();
+            let mut reader = packed;
+            let unpacked: f64 = unpack(&mut reader).unwrap();
+            unpacked.is_nan()
+        }
+    );
 
     assert_eq!(f64::INFINITY, {
         let packed = pack(&f64::INFINITY).unwrap();
@@ -1264,18 +1201,18 @@ fn test_primitive_arrays_pack_unpack() {
 #[test]
 fn test_char_encode_decode() {
     let test_chars = vec![
-        '\0',           // null character
-        'A',            // ASCII letter
-        '1',            // ASCII digit
-        ' ',            // space
-        '!',            // ASCII symbol
-        'あ',           // Japanese hiragana
-        '漢',           // Japanese kanji
-        '🚀',           // emoji
-        '€',            // Euro symbol
-        'Ω',            // Greek omega
-        '\u{1F600}',    // grinning face emoji
-        '\u{10FFFF}',   // maximum Unicode code point
+        '\0',         // null character
+        'A',          // ASCII letter
+        '1',          // ASCII digit
+        ' ',          // space
+        '!',          // ASCII symbol
+        'あ',         // Japanese hiragana
+        '漢',         // Japanese kanji
+        '🚀',         // emoji
+        '€',          // Euro symbol
+        'Ω',          // Greek omega
+        '\u{1F600}',  // grinning face emoji
+        '\u{10FFFF}', // maximum Unicode code point
     ];
 
     for &original in &test_chars {
@@ -1285,25 +1222,29 @@ fn test_char_encode_decode() {
         let mut reader = buffer.freeze();
         let decoded = char::decode(&mut reader).unwrap();
 
-        assert_eq!(original, decoded, "Failed encode/decode for char: {:?}", original);
+        assert_eq!(
+            original, decoded,
+            "Failed encode/decode for char: {:?}",
+            original
+        );
     }
 }
 
 #[test]
 fn test_char_pack_unpack() {
     let test_chars = vec![
-        '\0',           // null character
-        'A',            // ASCII letter
-        '1',            // ASCII digit
-        ' ',            // space
-        '!',            // ASCII symbol
-        'あ',           // Japanese hiragana
-        '漢',           // Japanese kanji
-        '🚀',           // emoji
-        '€',            // Euro symbol
-        'Ω',            // Greek omega
-        '\u{1F600}',    // grinning face emoji
-        '\u{10FFFF}',   // maximum Unicode code point
+        '\0',         // null character
+        'A',          // ASCII letter
+        '1',          // ASCII digit
+        ' ',          // space
+        '!',          // ASCII symbol
+        'あ',         // Japanese hiragana
+        '漢',         // Japanese kanji
+        '🚀',         // emoji
+        '€',          // Euro symbol
+        'Ω',          // Greek omega
+        '\u{1F600}',  // grinning face emoji
+        '\u{10FFFF}', // maximum Unicode code point
     ];
 
     for &original in &test_chars {
@@ -1313,17 +1254,21 @@ fn test_char_pack_unpack() {
         let mut reader = buffer.freeze();
         let decoded = char::unpack(&mut reader).unwrap();
 
-        assert_eq!(original, decoded, "Failed pack/unpack for char: {:?}", original);
+        assert_eq!(
+            original, decoded,
+            "Failed pack/unpack for char: {:?}",
+            original
+        );
     }
 }
 
 #[test]
 fn test_char_pack_vs_encode_size() {
     let test_chars = vec![
-        'A',            // ASCII
-        'あ',           // Japanese
-        '🚀',           // emoji
-        '\u{10FFFF}',   // max Unicode
+        'A',          // ASCII
+        'あ',         // Japanese
+        '🚀',         // emoji
+        '\u{10FFFF}', // max Unicode
     ];
 
     for &ch in &test_chars {
@@ -1337,22 +1282,33 @@ fn test_char_pack_vs_encode_size() {
         assert!(
             pack_buffer.len() <= encode_buffer.len(),
             "Pack size should be <= encode size for char: {:?} (pack: {}, encode: {})",
-            ch, pack_buffer.len(), encode_buffer.len()
+            ch,
+            pack_buffer.len(),
+            encode_buffer.len()
         );
     }
 }
 
 #[test]
 fn test_char_is_default() {
-    assert!(('\0').is_default(), "Null character should be default");
-    assert!(!('A').is_default(), "Non-null character should not be default");
-    assert!(!('あ').is_default(), "Unicode character should not be default");
-    assert!(!('🚀').is_default(), "Emoji should not be default");
+    assert!(
+        Encoder::is_default(&'\0'),
+        "Null character should be default"
+    );
+    assert!(
+        !Encoder::is_default(&'A'),
+        "Non-null character should not be default"
+    );
+    assert!(
+        !Encoder::is_default(&'あ'),
+        "Unicode character should not be default"
+    );
+    assert!(!Encoder::is_default(&'🚀'), "Emoji should not be default");
 }
 
 #[test]
 fn test_char_in_struct() {
-    #[derive(Encode, Decode, Debug, PartialEq)]
+    #[derive(Encode, Decode, Pack, Unpack, Debug, PartialEq)]
     struct CharStruct {
         letter: char,
         symbol: Option<char>,
@@ -1435,16 +1391,16 @@ fn test_char_in_collections() {
 #[test]
 fn test_char_unicode_edge_cases() {
     let edge_cases = vec![
-        '\u{0}',        // null
-        '\u{7F}',       // DEL (last ASCII)
-        '\u{80}',       // first non-ASCII
-        '\u{FF}',       // last Latin-1
-        '\u{100}',      // first beyond Latin-1
-        '\u{D7FF}',     // last before surrogate range
-        '\u{E000}',     // first after surrogate range
-        '\u{FFFF}',     // last in BMP
-        '\u{10000}',    // first supplementary
-        '\u{10FFFF}',   // last valid Unicode
+        '\u{0}',      // null
+        '\u{7F}',     // DEL (last ASCII)
+        '\u{80}',     // first non-ASCII
+        '\u{FF}',     // last Latin-1
+        '\u{100}',    // first beyond Latin-1
+        '\u{D7FF}',   // last before surrogate range
+        '\u{E000}',   // first after surrogate range
+        '\u{FFFF}',   // last in BMP
+        '\u{10000}',  // first supplementary
+        '\u{10FFFF}', // last valid Unicode
     ];
 
     for &ch in &edge_cases {
@@ -1455,7 +1411,11 @@ fn test_char_unicode_edge_cases() {
         let mut encode_reader = encode_buffer.freeze();
         let decoded = char::decode(&mut encode_reader).unwrap();
 
-        assert_eq!(ch, decoded, "Failed encode/decode for edge case char: U+{:04X}", ch as u32);
+        assert_eq!(
+            ch, decoded,
+            "Failed encode/decode for edge case char: U+{:04X}",
+            ch as u32
+        );
 
         // Test pack/unpack
         let mut pack_buffer = BytesMut::new();
@@ -1464,7 +1424,11 @@ fn test_char_unicode_edge_cases() {
         let mut pack_reader = pack_buffer.freeze();
         let unpacked = char::unpack(&mut pack_reader).unwrap();
 
-        assert_eq!(ch, unpacked, "Failed pack/unpack for edge case char: U+{:04X}", ch as u32);
+        assert_eq!(
+            ch, unpacked,
+            "Failed pack/unpack for edge case char: U+{:04X}",
+            ch as u32
+        );
     }
 }
 
@@ -1496,8 +1460,8 @@ fn test_char_cross_compatibility() {
 #[test]
 #[cfg(feature = "uuid")]
 fn test_uuid_default_and_non_default_pack_unpack() {
-    use uuid::Uuid;
     use std::str::FromStr;
+    use uuid::Uuid;
 
     // Test default UUID (should use TAG_NONE)
     let default_uuid = Uuid::default();

@@ -27,7 +27,6 @@ use crate::*;
 // --- IndexSet ---
 #[cfg(feature = "indexmap")]
 impl<T: Encoder + Eq + std::hash::Hash> Encoder for IndexSet<T> {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         encode_vec_length(self.len(), writer)?;
         for v in self {
@@ -36,12 +35,19 @@ impl<T: Encoder + Eq + std::hash::Hash> Encoder for IndexSet<T> {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.is_empty()
     }
-
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "indexmap")]
+impl<T: Decoder + Eq + std::hash::Hash + 'static> Decoder for IndexSet<T> {
+    fn decode(reader: &mut Bytes) -> Result<Self> {
+        let vec: Vec<T> = Vec::decode(reader)?;
+        Ok(vec.into_iter().collect())
+    }
+}
+#[cfg(feature = "indexmap")]
+impl<T: Packer + Eq + std::hash::Hash> Packer for IndexSet<T> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         encode_vec_length(self.len(), writer)?;
         for v in self {
@@ -51,13 +57,7 @@ impl<T: Encoder + Eq + std::hash::Hash> Encoder for IndexSet<T> {
     }
 }
 #[cfg(feature = "indexmap")]
-impl<T: Decoder + Eq + std::hash::Hash + 'static> Decoder for IndexSet<T> {
-    #[cfg(feature = "encode")]
-    fn decode(reader: &mut Bytes) -> Result<Self> {
-        let vec: Vec<T> = Vec::decode(reader)?;
-        Ok(vec.into_iter().collect())
-    }
-    #[cfg(feature = "pack")]
+impl<T: Unpacker + Eq + std::hash::Hash + 'static> Unpacker for IndexSet<T> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         let vec: Vec<T> = Vec::unpack(reader)?;
         Ok(vec.into_iter().collect())
@@ -67,7 +67,6 @@ impl<T: Decoder + Eq + std::hash::Hash + 'static> Decoder for IndexSet<T> {
 // --- IndexMap ---
 #[cfg(feature = "indexmap")]
 impl<K: Encoder + Eq + std::hash::Hash, V: Encoder> Encoder for IndexMap<K, V> {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_MAP);
         let len = self.len();
@@ -79,26 +78,12 @@ impl<K: Encoder + Eq + std::hash::Hash, V: Encoder> Encoder for IndexMap<K, V> {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.is_empty()
-    }
-
-    #[cfg(feature = "pack")]
-    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        writer.put_u8(TAG_MAP);
-        let len = self.len();
-        len.pack(writer)?;
-        for (k, v) in self {
-            k.pack(writer)?;
-            v.pack(writer)?;
-        }
-        Ok(())
     }
 }
 #[cfg(feature = "indexmap")]
 impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for IndexMap<K, V> {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -119,7 +104,22 @@ impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for IndexMap<K, V> {
         }
         Ok(map)
     }
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "indexmap")]
+impl<K: Packer + Eq + std::hash::Hash, V: Packer> Packer for IndexMap<K, V> {
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+        writer.put_u8(TAG_MAP);
+        let len = self.len();
+        len.pack(writer)?;
+        for (k, v) in self {
+            k.pack(writer)?;
+            v.pack(writer)?;
+        }
+        Ok(())
+    }
+}
+#[cfg(feature = "indexmap")]
+impl<K: Unpacker + Eq + std::hash::Hash, V: Unpacker> Unpacker for IndexMap<K, V> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -146,7 +146,6 @@ impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for IndexMap<K, V> {
 /// Encodes a `chrono::DateTime<Utc>` as seconds and nanoseconds since the Unix epoch.
 #[cfg(feature = "chrono")]
 impl Encoder for DateTime<Utc> {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_CHRONO_DATETIME);
         let timestamp_seconds = self.timestamp();
@@ -156,22 +155,6 @@ impl Encoder for DateTime<Utc> {
         Ok(())
     }
 
-    /// Packs a `chrono::DateTime<Utc>` as seconds and nanoseconds without a type tag.
-    #[cfg(feature = "pack")]
-    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        if *self == DateTime::<Utc>::default() {
-            writer.put_u8(TAG_NONE);
-        } else {
-            writer.put_u8(TAG_CHRONO_DATETIME);
-            let timestamp_seconds = self.timestamp();
-            let timestamp_nanos = self.timestamp_subsec_nanos();
-            timestamp_seconds.pack(writer)?;
-            timestamp_nanos.pack(writer)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == DateTime::<Utc>::default()
     }
@@ -179,7 +162,6 @@ impl Encoder for DateTime<Utc> {
 /// Decodes a `chrono::DateTime<Utc>` from the senax binary format.
 #[cfg(feature = "chrono")]
 impl Decoder for DateTime<Utc> {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -200,9 +182,28 @@ impl Decoder for DateTime<Utc> {
             ))
         })
     }
+}
 
-    /// Unpacks a `chrono::DateTime<Utc>` from the pack format.
-    #[cfg(feature = "pack")]
+/// Packs a `chrono::DateTime<Utc>` as seconds and nanoseconds without a type tag.
+#[cfg(feature = "chrono")]
+impl Packer for DateTime<Utc> {
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+        if *self == DateTime::<Utc>::default() {
+            writer.put_u8(TAG_NONE);
+        } else {
+            writer.put_u8(TAG_CHRONO_DATETIME);
+            let timestamp_seconds = self.timestamp();
+            let timestamp_nanos = self.timestamp_subsec_nanos();
+            timestamp_seconds.pack(writer)?;
+            timestamp_nanos.pack(writer)?;
+        }
+        Ok(())
+    }
+}
+
+/// Unpacks a `chrono::DateTime<Utc>` from the pack format.
+#[cfg(feature = "chrono")]
+impl Unpacker for DateTime<Utc> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -231,7 +232,6 @@ impl Decoder for DateTime<Utc> {
 // --- DateTime<Local> ---
 #[cfg(feature = "chrono")]
 impl Encoder for DateTime<Local> {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_CHRONO_DATETIME);
         let timestamp_seconds = self.timestamp();
@@ -241,29 +241,12 @@ impl Encoder for DateTime<Local> {
         Ok(())
     }
 
-    /// Packs a `chrono::DateTime<Local>` as seconds and nanoseconds without a type tag.
-    #[cfg(feature = "pack")]
-    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        if *self == DateTime::<Utc>::default() {
-            writer.put_u8(TAG_NONE);
-        } else {
-            writer.put_u8(TAG_CHRONO_DATETIME);
-            let timestamp_seconds = self.timestamp();
-            let timestamp_nanos = self.timestamp_subsec_nanos();
-            timestamp_seconds.pack(writer)?;
-            timestamp_nanos.pack(writer)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == DateTime::<Local>::default()
     }
 }
 #[cfg(feature = "chrono")]
 impl Decoder for DateTime<Local> {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -286,9 +269,28 @@ impl Decoder for DateTime<Local> {
             })?;
         Ok(utc_dt.with_timezone(&Local))
     }
+}
 
-    /// Unpacks a `chrono::DateTime<Local>` from the pack format.
-    #[cfg(feature = "pack")]
+/// Packs a `chrono::DateTime<Local>` as seconds and nanoseconds without a type tag.
+#[cfg(feature = "chrono")]
+impl Packer for DateTime<Local> {
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+        if *self == DateTime::<Local>::default() {
+            writer.put_u8(TAG_NONE);
+        } else {
+            writer.put_u8(TAG_CHRONO_DATETIME);
+            let timestamp_seconds = self.timestamp();
+            let timestamp_nanos = self.timestamp_subsec_nanos();
+            timestamp_seconds.pack(writer)?;
+            timestamp_nanos.pack(writer)?;
+        }
+        Ok(())
+    }
+}
+
+/// Unpacks a `chrono::DateTime<Local>` from the pack format.
+#[cfg(feature = "chrono")]
+impl Unpacker for DateTime<Local> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -299,12 +301,13 @@ impl Decoder for DateTime<Local> {
             TAG_CHRONO_DATETIME => {
                 let timestamp_seconds = i64::unpack(reader)?;
                 let timestamp_nanos = u32::unpack(reader)?;
-                let utc_dt = DateTime::from_timestamp(timestamp_seconds, timestamp_nanos).ok_or_else(|| {
-                    EncoderError::Decode(format!(
-                        "Invalid timestamp: {} seconds, {} nanos",
-                        timestamp_seconds, timestamp_nanos
-                    ))
-                })?;
+                let utc_dt = DateTime::from_timestamp(timestamp_seconds, timestamp_nanos)
+                    .ok_or_else(|| {
+                        EncoderError::Decode(format!(
+                            "Invalid timestamp: {} seconds, {} nanos",
+                            timestamp_seconds, timestamp_nanos
+                        ))
+                    })?;
                 Ok(utc_dt.with_timezone(&Local))
             }
             _ => Err(EncoderError::Decode(format!(
@@ -318,7 +321,6 @@ impl Decoder for DateTime<Local> {
 // --- NaiveDate ---
 #[cfg(feature = "chrono")]
 impl Encoder for NaiveDate {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_CHRONO_NAIVE_DATE);
         // Store as days since 1970-01-01
@@ -329,25 +331,12 @@ impl Encoder for NaiveDate {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == NaiveDate::default()
-    }
-
-    #[cfg(feature = "pack")]
-    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        writer.put_u8(TAG_CHRONO_NAIVE_DATE);
-        // Store as days since 1970-01-01
-        let days_from_epoch = self
-            .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
-            .num_days();
-        days_from_epoch.pack(writer)?;
-        Ok(())
     }
 }
 #[cfg(feature = "chrono")]
 impl Decoder for NaiveDate {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -367,7 +356,9 @@ impl Decoder for NaiveDate {
                 EncoderError::Decode(format!("Invalid days from epoch: {}", days_from_epoch))
             })
     }
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "chrono")]
+impl Unpacker for NaiveDate {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -388,11 +379,22 @@ impl Decoder for NaiveDate {
             })
     }
 }
+#[cfg(feature = "chrono")]
+impl Packer for NaiveDate {
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+        writer.put_u8(TAG_CHRONO_NAIVE_DATE);
+        // Store as days since 1970-01-01
+        let days_from_epoch = self
+            .signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days();
+        days_from_epoch.pack(writer)?;
+        Ok(())
+    }
+}
 
 // --- NaiveTime ---
 #[cfg(feature = "chrono")]
 impl Encoder for NaiveTime {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_CHRONO_NAIVE_TIME);
         // Store seconds and nanoseconds from 00:00:00 separately
@@ -403,25 +405,12 @@ impl Encoder for NaiveTime {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == NaiveTime::default()
-    }
-
-    #[cfg(feature = "pack")]
-    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        writer.put_u8(TAG_CHRONO_NAIVE_TIME);
-        // Store seconds and nanoseconds from 00:00:00 separately
-        let seconds_from_midnight = self.num_seconds_from_midnight();
-        let nanoseconds = self.nanosecond();
-        seconds_from_midnight.pack(writer)?;
-        nanoseconds.pack(writer)?;
-        Ok(())
     }
 }
 #[cfg(feature = "chrono")]
 impl Decoder for NaiveTime {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -443,7 +432,9 @@ impl Decoder for NaiveTime {
                 ))
             })
     }
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "chrono")]
+impl Unpacker for NaiveTime {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -466,11 +457,22 @@ impl Decoder for NaiveTime {
             })
     }
 }
+#[cfg(feature = "chrono")]
+impl Packer for NaiveTime {
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+        writer.put_u8(TAG_CHRONO_NAIVE_TIME);
+        // Store seconds and nanoseconds from 00:00:00 separately
+        let seconds_from_midnight = self.num_seconds_from_midnight();
+        let nanoseconds = self.nanosecond();
+        seconds_from_midnight.pack(writer)?;
+        nanoseconds.pack(writer)?;
+        Ok(())
+    }
+}
 
 // --- Decimal ---
 #[cfg(feature = "rust_decimal")]
 impl Encoder for Decimal {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_DECIMAL);
         // Get Decimal's internal representation and encode it
@@ -481,25 +483,18 @@ impl Encoder for Decimal {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == Decimal::default()
     }
-
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "rust_decimal")]
+impl Packer for Decimal {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        writer.put_u8(TAG_DECIMAL);
-        // Get Decimal's internal representation and encode it
-        let mantissa = self.mantissa();
-        let scale = self.scale();
-        mantissa.pack(writer)?;
-        scale.pack(writer)?;
-        Ok(())
+        self.encode(writer)
     }
 }
 #[cfg(feature = "rust_decimal")]
 impl Decoder for Decimal {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -521,34 +516,17 @@ impl Decoder for Decimal {
             ))
         })
     }
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "rust_decimal")]
+impl Unpacker for Decimal {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        if tag != TAG_DECIMAL {
-            return Err(EncoderError::Decode(format!(
-                "Expected Decimal tag ({}), got {}",
-                TAG_DECIMAL, tag
-            )));
-        }
-        let mantissa = i128::unpack(reader)?;
-        let scale = u32::unpack(reader)?;
-
-        Decimal::try_from_i128_with_scale(mantissa, scale).map_err(|e| {
-            EncoderError::Decode(format!(
-                "Invalid decimal: mantissa={}, scale={}, error={}",
-                mantissa, scale, e
-            ))
-        })
+        Self::decode(reader)
     }
 }
 
 // --- UUID ---
 #[cfg(feature = "uuid")]
 impl Encoder for Uuid {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_UUID);
         // Write UUID as u128 little-endian in fixed 16 bytes
@@ -557,12 +535,12 @@ impl Encoder for Uuid {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == Uuid::default()
     }
-
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "uuid")]
+impl Packer for Uuid {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         if *self == Uuid::default() {
             writer.put_u8(TAG_NONE);
@@ -577,7 +555,6 @@ impl Encoder for Uuid {
 }
 #[cfg(feature = "uuid")]
 impl Decoder for Uuid {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -595,7 +572,9 @@ impl Decoder for Uuid {
         let uuid_u128 = reader.get_u128_le();
         Ok(Uuid::from_u128(uuid_u128))
     }
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "uuid")]
+impl Unpacker for Uuid {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -621,7 +600,6 @@ impl Decoder for Uuid {
 // --- ULID ---
 #[cfg(feature = "ulid")]
 impl Encoder for Ulid {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_UUID); // Use same tag as UUID
                                  // Write ULID as u128 little-endian in fixed 16 bytes
@@ -630,12 +608,12 @@ impl Encoder for Ulid {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == Ulid::default()
     }
-
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "ulid")]
+impl Packer for Ulid {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         if *self == Ulid::default() {
             writer.put_u8(TAG_NONE);
@@ -650,7 +628,6 @@ impl Encoder for Ulid {
 }
 #[cfg(feature = "ulid")]
 impl Decoder for Ulid {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -668,7 +645,9 @@ impl Decoder for Ulid {
         let ulid_u128 = reader.get_u128_le();
         Ok(Ulid(ulid_u128))
     }
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "ulid")]
+impl Unpacker for Ulid {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -694,7 +673,6 @@ impl Decoder for Ulid {
 // --- serde_json::Value ---
 #[cfg(feature = "serde_json")]
 impl Encoder for Value {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         match self {
             Value::Null => {
@@ -752,73 +730,20 @@ impl Encoder for Value {
         }
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == Value::default()
     }
+}
 
-    #[cfg(feature = "pack")]
+#[cfg(feature = "serde_json")]
+impl Packer for Value {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        match self {
-            Value::Null => {
-                writer.put_u8(TAG_JSON_NULL);
-                Ok(())
-            }
-            Value::Bool(b) => {
-                writer.put_u8(TAG_JSON_BOOL);
-                b.pack(writer)?;
-                Ok(())
-            }
-            Value::Number(n) => {
-                writer.put_u8(TAG_JSON_NUMBER);
-                // Preserve integer/float distinction where possible
-                if let Some(u) = n.as_u64() {
-                    // Encode as tagged unsigned integer
-                    writer.put_u8(0); // Unsigned integer (u64) marker
-                    u.pack(writer)?;
-                } else if let Some(i) = n.as_i64() {
-                    // Encode as tagged signed integer
-                    writer.put_u8(1); // Signed integer (i64) marker
-                    i.pack(writer)?;
-                } else {
-                    // Encode as float
-                    writer.put_u8(2); // Float marker
-                    let float_val = n.as_f64().unwrap_or(0.0);
-                    float_val.pack(writer)?;
-                }
-                Ok(())
-            }
-            Value::String(s) => {
-                writer.put_u8(TAG_JSON_STRING);
-                s.pack(writer)?;
-                Ok(())
-            }
-            Value::Array(arr) => {
-                writer.put_u8(TAG_JSON_ARRAY);
-                let len = arr.len();
-                len.pack(writer)?;
-                for item in arr {
-                    item.pack(writer)?;
-                }
-                Ok(())
-            }
-            Value::Object(obj) => {
-                writer.put_u8(TAG_JSON_OBJECT);
-                let len = obj.len();
-                len.pack(writer)?;
-                for (key, value) in obj {
-                    key.pack(writer)?;
-                    value.pack(writer)?;
-                }
-                Ok(())
-            }
-        }
+        self.encode(writer)
     }
 }
 
 #[cfg(feature = "serde_json")]
 impl Decoder for Value {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -887,81 +812,18 @@ impl Decoder for Value {
             ))),
         }
     }
-    #[cfg(feature = "pack")]
+}
+
+#[cfg(feature = "serde_json")]
+impl Unpacker for Value {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        match tag {
-            TAG_JSON_NULL => Ok(Value::Null),
-            TAG_JSON_BOOL => {
-                let b = bool::unpack(reader)?;
-                Ok(Value::Bool(b))
-            }
-            TAG_JSON_NUMBER => {
-                if reader.remaining() == 0 {
-                    return Err(EncoderError::InsufficientData);
-                }
-                let number_type = reader.get_u8();
-                match number_type {
-                    0 => {
-                        // Unsigned integer
-                        let u = u64::unpack(reader)?;
-                        Ok(Value::Number(Number::from(u)))
-                    }
-                    1 => {
-                        // Signed integer
-                        let i = i64::unpack(reader)?;
-                        Ok(Value::Number(Number::from(i)))
-                    }
-                    2 => {
-                        // Float
-                        let f = f64::unpack(reader)?;
-                        Ok(Value::Number(
-                            Number::from_f64(f).unwrap_or(Number::from(0)),
-                        ))
-                    }
-                    _ => Err(EncoderError::Decode(format!(
-                        "Invalid JSON Number type marker: {}",
-                        number_type
-                    ))),
-                }
-            }
-            TAG_JSON_STRING => {
-                let s = String::unpack(reader)?;
-                Ok(Value::String(s))
-            }
-            TAG_JSON_ARRAY => {
-                let len = usize::unpack(reader)?;
-                let mut arr = Vec::with_capacity(len);
-                for _ in 0..len {
-                    arr.push(Value::unpack(reader)?);
-                }
-                Ok(Value::Array(arr))
-            }
-            TAG_JSON_OBJECT => {
-                let len = usize::unpack(reader)?;
-                let mut obj = Map::with_capacity(len);
-                for _ in 0..len {
-                    let key = String::unpack(reader)?;
-                    let value = Value::unpack(reader)?;
-                    obj.insert(key, value);
-                }
-                Ok(Value::Object(obj))
-            }
-            _ => Err(EncoderError::Decode(format!(
-                "Expected JSON Value tag (202-207), got {}",
-                tag
-            ))),
-        }
+        Self::decode(reader)
     }
 }
 
 // --- FxHashMap ---
 #[cfg(feature = "fxhash")]
 impl<K: Encoder + Eq + std::hash::Hash, V: Encoder> Encoder for FxHashMap<K, V> {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_MAP);
         let len = self.len();
@@ -973,12 +835,12 @@ impl<K: Encoder + Eq + std::hash::Hash, V: Encoder> Encoder for FxHashMap<K, V> 
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.is_empty()
     }
-
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "fxhash")]
+impl<K: Packer + Eq + std::hash::Hash, V: Packer> Packer for FxHashMap<K, V> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_MAP);
         let len = self.len();
@@ -992,7 +854,6 @@ impl<K: Encoder + Eq + std::hash::Hash, V: Encoder> Encoder for FxHashMap<K, V> 
 }
 #[cfg(feature = "fxhash")]
 impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for FxHashMap<K, V> {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1013,7 +874,9 @@ impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for FxHashMap<K, V> 
         }
         Ok(map)
     }
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "fxhash")]
+impl<K: Unpacker + Eq + std::hash::Hash, V: Unpacker> Unpacker for FxHashMap<K, V> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1039,7 +902,6 @@ impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for FxHashMap<K, V> 
 // --- AHashMap ---
 #[cfg(feature = "ahash")]
 impl<K: Encoder + Eq + std::hash::Hash, V: Encoder> Encoder for AHashMap<K, V> {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_MAP);
         let len = self.len();
@@ -1051,12 +913,12 @@ impl<K: Encoder + Eq + std::hash::Hash, V: Encoder> Encoder for AHashMap<K, V> {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.is_empty()
     }
-
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "ahash")]
+impl<K: Packer + Eq + std::hash::Hash, V: Packer> Packer for AHashMap<K, V> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_MAP);
         let len = self.len();
@@ -1070,7 +932,6 @@ impl<K: Encoder + Eq + std::hash::Hash, V: Encoder> Encoder for AHashMap<K, V> {
 }
 #[cfg(feature = "ahash")]
 impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for AHashMap<K, V> {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1091,7 +952,9 @@ impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for AHashMap<K, V> {
         }
         Ok(map)
     }
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "ahash")]
+impl<K: Unpacker + Eq + std::hash::Hash, V: Unpacker> Unpacker for AHashMap<K, V> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1117,7 +980,6 @@ impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for AHashMap<K, V> {
 // --- FxHashSet ---
 #[cfg(feature = "fxhash")]
 impl<T: Encoder + Eq + std::hash::Hash> Encoder for FxHashSet<T> {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         encode_vec_length(self.len(), writer)?;
         for v in self {
@@ -1126,12 +988,12 @@ impl<T: Encoder + Eq + std::hash::Hash> Encoder for FxHashSet<T> {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.is_empty()
     }
-
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "fxhash")]
+impl<T: Packer + Eq + std::hash::Hash> Packer for FxHashSet<T> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         encode_vec_length(self.len(), writer)?;
         for v in self {
@@ -1142,12 +1004,13 @@ impl<T: Encoder + Eq + std::hash::Hash> Encoder for FxHashSet<T> {
 }
 #[cfg(feature = "fxhash")]
 impl<T: Decoder + Eq + std::hash::Hash + 'static> Decoder for FxHashSet<T> {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         let vec: Vec<T> = Vec::decode(reader)?;
         Ok(vec.into_iter().collect())
     }
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "fxhash")]
+impl<T: Unpacker + Eq + std::hash::Hash + 'static> Unpacker for FxHashSet<T> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         let vec: Vec<T> = Vec::unpack(reader)?;
         Ok(vec.into_iter().collect())
@@ -1157,7 +1020,6 @@ impl<T: Decoder + Eq + std::hash::Hash + 'static> Decoder for FxHashSet<T> {
 // --- AHashSet ---
 #[cfg(feature = "ahash")]
 impl<T: Encoder + Eq + std::hash::Hash> Encoder for AHashSet<T> {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         encode_vec_length(self.len(), writer)?;
         for v in self {
@@ -1166,12 +1028,12 @@ impl<T: Encoder + Eq + std::hash::Hash> Encoder for AHashSet<T> {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.is_empty()
     }
-
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "ahash")]
+impl<T: Packer + Eq + std::hash::Hash> Packer for AHashSet<T> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         encode_vec_length(self.len(), writer)?;
         for v in self {
@@ -1182,12 +1044,13 @@ impl<T: Encoder + Eq + std::hash::Hash> Encoder for AHashSet<T> {
 }
 #[cfg(feature = "ahash")]
 impl<T: Decoder + Eq + std::hash::Hash + 'static> Decoder for AHashSet<T> {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         let vec: Vec<T> = Vec::decode(reader)?;
         Ok(vec.into_iter().collect())
     }
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "ahash")]
+impl<T: Unpacker + Eq + std::hash::Hash + 'static> Unpacker for AHashSet<T> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         let vec: Vec<T> = Vec::unpack(reader)?;
         Ok(vec.into_iter().collect())
@@ -1197,7 +1060,6 @@ impl<T: Decoder + Eq + std::hash::Hash + 'static> Decoder for AHashSet<T> {
 // --- SmolStr ---
 #[cfg(feature = "smol_str")]
 impl Encoder for SmolStr {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         let len = self.len();
         let max_short = (TAG_STRING_LONG - TAG_STRING_BASE - 1) as usize;
@@ -1213,30 +1075,18 @@ impl Encoder for SmolStr {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.is_empty()
     }
-
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "smol_str")]
+impl Packer for SmolStr {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        let len = self.len();
-        let max_short = (TAG_STRING_LONG - TAG_STRING_BASE - 1) as usize;
-        if len <= max_short {
-            let tag = TAG_STRING_BASE + len as u8;
-            writer.put_u8(tag);
-            writer.put_slice(self.as_bytes());
-        } else {
-            writer.put_u8(TAG_STRING_LONG);
-            len.pack(writer)?;
-            writer.put_slice(self.as_bytes());
-        }
-        Ok(())
+        self.encode(writer)
     }
 }
 #[cfg(feature = "smol_str")]
 impl Decoder for SmolStr {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1262,30 +1112,10 @@ impl Decoder for SmolStr {
         let string = String::from_utf8(bytes).map_err(|e| EncoderError::Decode(e.to_string()))?;
         Ok(SmolStr::new(string))
     }
-    #[cfg(feature = "pack")]
+}
+#[cfg(feature = "smol_str")]
+impl Unpacker for SmolStr {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        let len = if (TAG_STRING_BASE..TAG_STRING_LONG).contains(&tag) {
-            (tag - TAG_STRING_BASE) as usize
-        } else if tag == TAG_STRING_LONG {
-            usize::unpack(reader)?
-        } else {
-            return Err(EncoderError::Decode(format!(
-                "Expected String tag ({}..={}), got {}",
-                TAG_STRING_BASE, TAG_STRING_LONG, tag
-            )));
-        };
-        if reader.remaining() < len {
-            return Err(EncoderError::InsufficientData);
-        }
-        let mut bytes = vec![0u8; len];
-        if len > 0 {
-            reader.copy_to_slice(&mut bytes);
-        }
-        let string = String::from_utf8(bytes).map_err(|e| EncoderError::Decode(e.to_string()))?;
-        Ok(SmolStr::new(string))
+        Self::decode(reader)
     }
 }

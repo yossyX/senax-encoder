@@ -1,5 +1,3 @@
-#![cfg(feature = "encode")]
-
 use bytes::BytesMut;
 use senax_encoder::Decoder;
 use senax_encoder::Encoder;
@@ -353,9 +351,9 @@ fn test_missing_required_field_error() {
     let result = RequiredFieldStruct::decode(&mut reader);
 
     assert!(result.is_err());
-    // Check that error message contains "Required field"
+    // Check that error message contains "MissingRequiredField"
     let error_msg = format!("{:?}", result.unwrap_err());
-    assert!(error_msg.contains("Required field"));
+    assert!(error_msg.contains("MissingRequiredField"));
 }
 
 // =============================================================================

@@ -29,7 +29,7 @@ pub const TAG_F64: u8 = 138;
 pub const TAG_STRING_BASE: u8 = 139;
 ///< Long string (length encoded) - String, SmolStr
 pub const TAG_STRING_LONG: u8 = 180;
-///< Vec<u8> or Bytes
+///< Bytes
 pub const TAG_BINARY: u8 = 181;
 ///< Unit struct
 pub const TAG_STRUCT_UNIT: u8 = 182;
@@ -70,31 +70,31 @@ pub const TAG_JSON_OBJECT: u8 = 207;
 // --- bool ---
 /// Encodes a `bool` as a single tag byte: `TAG_ZERO` for `false`, `TAG_ONE` for `true`.
 impl Encoder for bool {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         let tag = if !*self { TAG_ZERO } else { TAG_ONE }; // 0: false, 1: true
         writer.put_u8(tag);
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         !(*self)
     }
+}
 
-    #[cfg(feature = "pack")]
+/// Packs a `bool` as a single tag byte: `TAG_ZERO` for `false`, `TAG_ONE` for `true`.
+impl Packer for bool {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         let tag = if !*self { TAG_ZERO } else { TAG_ONE }; // 0: false, 1: true
         writer.put_u8(tag);
         Ok(())
     }
 }
+
 /// Decodes a `bool` from a single tag byte.
 ///
 /// # Errors
 /// Returns an error if the tag is not `TAG_ZERO` or `TAG_ONE`.
 impl Decoder for bool {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -109,12 +109,13 @@ impl Decoder for bool {
             ))),
         }
     }
+}
 
-    /// Unpacks a `bool` from a single byte with relaxed validation.
-    ///
-    /// 0 is interpreted as `false`, any non-zero value is interpreted as `true`.
-    /// No error checking is performed for invalid values.
-    #[cfg(feature = "pack")]
+/// Unpacks a `bool` from a single byte with relaxed validation.
+///
+/// 0 is interpreted as `false`, any non-zero value is interpreted as `true`.
+/// No error checking is performed for invalid values.
+impl Unpacker for bool {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -131,7 +132,7 @@ impl Decoder for bool {
 /// # Errors
 /// Returns an error if the tag is not valid for a `u8`.
 #[inline]
-#[cfg(feature = "encode")]
+
 fn decode_u8_from_tag(tag: u8, reader: &mut Bytes) -> Result<u8> {
     if (TAG_ZERO..=TAG_U8_127).contains(&tag) {
         Ok(tag - TAG_ZERO)
@@ -281,7 +282,6 @@ fn decode_u128_from_tag(tag: u8, reader: &mut Bytes) -> Result<u128> {
 /// - Larger values use `TAG_U8`, `TAG_U16`, `TAG_U32`, `TAG_U64`, or `TAG_U128` with the value in little-endian
 /// - The encoding is stable and compatible across platforms
 impl Encoder for u8 {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         if *self <= 127 {
             writer.put_u8(TAG_ZERO + *self);
@@ -292,20 +292,20 @@ impl Encoder for u8 {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == 0
     }
+}
 
-    #[cfg(feature = "pack")]
+impl Packer for u8 {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(*self);
         Ok(())
     }
 }
+
 /// Decodes a `u8` from the compact format.
 impl Decoder for u8 {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -313,7 +313,9 @@ impl Decoder for u8 {
         let tag = reader.get_u8();
         decode_u8_from_tag(tag, reader)
     }
-    #[cfg(feature = "pack")]
+}
+
+impl Unpacker for u8 {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -321,9 +323,9 @@ impl Decoder for u8 {
         Ok(reader.get_u8())
     }
 }
+
 /// See `u8` for format details.
 impl Encoder for u16 {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         if *self <= 127 {
             writer.put_u8(TAG_ZERO + (*self as u8));
@@ -337,27 +339,18 @@ impl Encoder for u16 {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == 0
     }
+}
 
-    #[cfg(feature = "pack")]
+impl Packer for u16 {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        if *self <= 127 {
-            writer.put_u8(TAG_ZERO + (*self as u8));
-        } else if *self <= 255 + 128 {
-            writer.put_u8(TAG_U8);
-            writer.put_u8((*self - 128) as u8);
-        } else {
-            writer.put_u8(TAG_U16);
-            writer.put_u16_le(*self);
-        }
-        Ok(())
+        self.encode(writer)
     }
 }
+
 impl Decoder for u16 {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -365,17 +358,15 @@ impl Decoder for u16 {
         let tag = reader.get_u8();
         decode_u16_from_tag(tag, reader)
     }
-    #[cfg(feature = "pack")]
+}
+
+impl Unpacker for u16 {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        decode_u16_from_tag(tag, reader)
+        Self::decode(reader)
     }
 }
+
 impl Encoder for u32 {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         if *self <= 127 {
             writer.put_u8(TAG_ZERO + (*self as u8));
@@ -392,30 +383,19 @@ impl Encoder for u32 {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == 0
     }
+}
 
-    #[cfg(feature = "pack")]
+impl Packer for u32 {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        if *self <= 127 {
-            writer.put_u8(TAG_ZERO + (*self as u8));
-        } else if *self <= 255 + 128 {
-            writer.put_u8(TAG_U8);
-            writer.put_u8((*self - 128) as u8);
-        } else if *self <= 65535 {
-            writer.put_u8(TAG_U16);
-            writer.put_u16_le(*self as u16);
-        } else {
-            writer.put_u8(TAG_U32);
-            writer.put_u32_le(*self);
-        }
-        Ok(())
+        self.encode(writer)
     }
 }
+
+/// Decodes a `u32` from the compact format.
 impl Decoder for u32 {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -423,17 +403,16 @@ impl Decoder for u32 {
         let tag = reader.get_u8();
         decode_u32_from_tag(tag, reader)
     }
-    #[cfg(feature = "pack")]
+}
+
+impl Unpacker for u32 {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        decode_u32_from_tag(tag, reader)
+        Self::decode(reader)
     }
 }
+
+/// See `u32` for format details.
 impl Encoder for u64 {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         if *self <= 127 {
             writer.put_u8(TAG_ZERO + (*self as u8));
@@ -453,33 +432,19 @@ impl Encoder for u64 {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == 0
     }
+}
 
-    #[cfg(feature = "pack")]
+impl Packer for u64 {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        if *self <= 127 {
-            writer.put_u8(TAG_ZERO + (*self as u8));
-        } else if *self <= 255 + 128 {
-            writer.put_u8(TAG_U8);
-            writer.put_u8((*self - 128) as u8);
-        } else if *self <= 65535 {
-            writer.put_u8(TAG_U16);
-            writer.put_u16_le(*self as u16);
-        } else if *self <= 4294967295 {
-            writer.put_u8(TAG_U32);
-            writer.put_u32_le(*self as u32);
-        } else {
-            writer.put_u8(TAG_U64);
-            writer.put_u64_le(*self);
-        }
-        Ok(())
+        self.encode(writer)
     }
 }
+
+/// Decodes a `u64` from the compact format.
 impl Decoder for u64 {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -487,17 +452,16 @@ impl Decoder for u64 {
         let tag = reader.get_u8();
         decode_u64_from_tag(tag, reader)
     }
-    #[cfg(feature = "pack")]
+}
+
+impl Unpacker for u64 {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        decode_u64_from_tag(tag, reader)
+        Self::decode(reader)
     }
 }
+
+/// See `u64` for format details.
 impl Encoder for u128 {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         if *self <= 127 {
             writer.put_u8(TAG_ZERO + (*self as u8));
@@ -520,36 +484,18 @@ impl Encoder for u128 {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == 0
     }
+}
 
-    #[cfg(feature = "pack")]
+impl Packer for u128 {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        if *self <= 127 {
-            writer.put_u8(TAG_ZERO + (*self as u8));
-        } else if *self <= 255 + 128 {
-            writer.put_u8(TAG_U8);
-            writer.put_u8((*self - 128) as u8);
-        } else if *self <= 65535 {
-            writer.put_u8(TAG_U16);
-            writer.put_u16_le(*self as u16);
-        } else if *self <= 4294967295 {
-            writer.put_u8(TAG_U32);
-            writer.put_u32_le(*self as u32);
-        } else if *self <= 18446744073709551615 {
-            writer.put_u8(TAG_U64);
-            writer.put_u64_le(*self as u64);
-        } else {
-            writer.put_u8(TAG_U128);
-            writer.put_u128_le(*self);
-        }
-        Ok(())
+        self.encode(writer)
     }
 }
+
 impl Decoder for u128 {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -557,19 +503,17 @@ impl Decoder for u128 {
         let tag = reader.get_u8();
         decode_u128_from_tag(tag, reader)
     }
-    #[cfg(feature = "pack")]
+}
+
+impl Unpacker for u128 {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        decode_u128_from_tag(tag, reader)
+        Self::decode(reader)
     }
 }
+
 /// Encodes `usize` using the platform's pointer width, but always as a portable integer format.
 impl Encoder for usize {
     #[inline]
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         if usize::BITS == u64::BITS {
             let v = *self as u64;
@@ -586,31 +530,19 @@ impl Encoder for usize {
         }
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == 0
     }
+}
 
+impl Packer for usize {
     #[inline]
-    #[cfg(feature = "pack")]
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        if usize::BITS == u64::BITS {
-            let v = *self as u64;
-            v.pack(writer)
-        } else if usize::BITS == u32::BITS {
-            let v = *self as u32;
-            v.pack(writer)
-        } else if usize::BITS == u16::BITS {
-            let v = *self as u16;
-            v.pack(writer)
-        } else {
-            let v = *self as u128;
-            v.pack(writer)
-        }
+        self.encode(writer)
     }
 }
+
 impl Decoder for usize {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -626,21 +558,11 @@ impl Decoder for usize {
             Ok(decode_u128_from_tag(tag, reader)? as usize)
         }
     }
-    #[cfg(feature = "pack")]
+}
+
+impl Unpacker for usize {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        if usize::BITS == u64::BITS {
-            Ok(decode_u64_from_tag(tag, reader)? as usize)
-        } else if usize::BITS == u32::BITS {
-            Ok(decode_u32_from_tag(tag, reader)? as usize)
-        } else if usize::BITS == u16::BITS {
-            Ok(decode_u16_from_tag(tag, reader)? as usize)
-        } else {
-            Ok(decode_u128_from_tag(tag, reader)? as usize)
-        }
+        Self::decode(reader)
     }
 }
 
@@ -650,7 +572,6 @@ impl Decoder for usize {
 /// - Non-negative values (>= 0) are encoded as unsigned integers
 /// - Negative values use `TAG_NEGATIVE` and bit-inverted encoding
 impl Encoder for i8 {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         if *self >= 0 {
             (*self as u8).encode(writer)
@@ -661,23 +582,23 @@ impl Encoder for i8 {
         }
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == 0
     }
+}
 
-    #[cfg(feature = "pack")]
+impl Packer for i8 {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_i8(*self);
         Ok(())
     }
 }
+
 /// Decodes a `i8` from the bit-inverted encoding.
 ///
 /// # Errors
 /// Returns an error if the tag is not valid for an `i8`.
 impl Decoder for i8 {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -700,7 +621,9 @@ impl Decoder for i8 {
             }
         }
     }
-    #[cfg(feature = "pack")]
+}
+
+impl Unpacker for i8 {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -710,7 +633,6 @@ impl Decoder for i8 {
 }
 // i16
 impl Encoder for i16 {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         if *self >= 0 {
             (*self as u16).encode(writer)
@@ -721,24 +643,18 @@ impl Encoder for i16 {
         }
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == 0
     }
+}
 
-    #[cfg(feature = "pack")]
+impl Packer for i16 {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        if *self >= 0 {
-            (*self as u16).pack(writer)
-        } else {
-            writer.put_u8(TAG_NEGATIVE);
-            let inv = !(*self as u16);
-            inv.pack(writer)
-        }
+        self.encode(writer)
     }
 }
+
 impl Decoder for i16 {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -761,33 +677,15 @@ impl Decoder for i16 {
             }
         }
     }
-    #[cfg(feature = "pack")]
+}
+
+impl Unpacker for i16 {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        match tag {
-            TAG_NEGATIVE => {
-                let inv = u16::unpack(reader)?;
-                Ok(!inv as i16)
-            }
-            t => {
-                let v = decode_u16_from_tag(t, reader)?;
-                if v > i16::MAX as u16 {
-                    return Err(EncoderError::Decode(format!(
-                        "Value {} too large for i16",
-                        v
-                    )));
-                }
-                Ok(v as i16)
-            }
-        }
+        Self::decode(reader)
     }
 }
 // i32
 impl Encoder for i32 {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         if *self >= 0 {
             (*self as u32).encode(writer)
@@ -798,24 +696,18 @@ impl Encoder for i32 {
         }
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == 0
     }
+}
 
-    #[cfg(feature = "pack")]
+impl Packer for i32 {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        if *self >= 0 {
-            (*self as u32).pack(writer)
-        } else {
-            writer.put_u8(TAG_NEGATIVE);
-            let inv = !(*self as u32);
-            inv.pack(writer)
-        }
+        self.encode(writer)
     }
 }
+
 impl Decoder for i32 {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -838,33 +730,16 @@ impl Decoder for i32 {
             }
         }
     }
-    #[cfg(feature = "pack")]
+}
+
+impl Unpacker for i32 {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        match tag {
-            TAG_NEGATIVE => {
-                let inv = u32::unpack(reader)?;
-                Ok(!inv as i32)
-            }
-            t => {
-                let v = decode_u32_from_tag(t, reader)?;
-                if v > i32::MAX as u32 {
-                    return Err(EncoderError::Decode(format!(
-                        "Value {} too large for i32",
-                        v
-                    )));
-                }
-                Ok(v as i32)
-            }
-        }
+        Self::decode(reader)
     }
 }
+
 // i64
 impl Encoder for i64 {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         if *self >= 0 {
             (*self as u64).encode(writer)
@@ -875,24 +750,18 @@ impl Encoder for i64 {
         }
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == 0
     }
+}
 
-    #[cfg(feature = "pack")]
+impl Packer for i64 {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        if *self >= 0 {
-            (*self as u64).pack(writer)
-        } else {
-            writer.put_u8(TAG_NEGATIVE);
-            let inv = !(*self as u64);
-            inv.pack(writer)
-        }
+        self.encode(writer)
     }
 }
+
 impl Decoder for i64 {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -915,33 +784,16 @@ impl Decoder for i64 {
             }
         }
     }
-    #[cfg(feature = "pack")]
+}
+
+impl Unpacker for i64 {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        match tag {
-            TAG_NEGATIVE => {
-                let inv = u64::unpack(reader)?;
-                Ok(!inv as i64)
-            }
-            t => {
-                let v = decode_u64_from_tag(t, reader)?;
-                if v > i64::MAX as u64 {
-                    return Err(EncoderError::Decode(format!(
-                        "Value {} too large for i64",
-                        v
-                    )));
-                }
-                Ok(v as i64)
-            }
-        }
+        Self::decode(reader)
     }
 }
+
 // i128
 impl Encoder for i128 {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         if *self >= 0 {
             (*self as u128).encode(writer)
@@ -952,25 +804,18 @@ impl Encoder for i128 {
         }
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == 0
     }
-
-    #[cfg(feature = "pack")]
-    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        if *self >= 0 {
-            (*self as u128).pack(writer)
-        } else {
-            writer.put_u8(TAG_NEGATIVE);
-            let inv = !(*self as u128);
-            inv.pack(writer)
-        }
-    }
-
 }
+
+impl Packer for i128 {
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+        self.encode(writer)
+    }
+}
+
 impl Decoder for i128 {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -993,33 +838,16 @@ impl Decoder for i128 {
             }
         }
     }
-    #[cfg(feature = "pack")]
+}
+
+impl Unpacker for i128 {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        match tag {
-            TAG_NEGATIVE => {
-                let inv = u128::unpack(reader)?;
-                Ok(!inv as i128)
-            }
-            t => {
-                let v = decode_u128_from_tag(t, reader)?;
-                if v > i128::MAX as u128 {
-                    return Err(EncoderError::Decode(format!(
-                        "Value {} too large for i128",
-                        v
-                    )));
-                }
-                Ok(v as i128)
-            }
-        }
+        Self::decode(reader)
     }
 }
+
 // isize
 impl Encoder for isize {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         if usize::BITS == u64::BITS {
             let v = *self as i64;
@@ -1036,30 +864,18 @@ impl Encoder for isize {
         }
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == 0
     }
+}
 
-    #[cfg(feature = "pack")]
+impl Packer for isize {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        if usize::BITS == u64::BITS {
-            let v = *self as i64;
-            v.pack(writer)
-        } else if usize::BITS == u32::BITS {
-            let v = *self as i32;
-            v.pack(writer)
-        } else if usize::BITS == u16::BITS {
-            let v = *self as i16;
-            v.pack(writer)
-        } else {
-            let v = *self as i128;
-            v.pack(writer)
-        }
+        self.encode(writer)
     }
 }
+
 impl Decoder for isize {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1074,41 +890,30 @@ impl Decoder for isize {
             Ok(i128::decode(reader)? as isize)
         }
     }
-    #[cfg(feature = "pack")]
+}
+
+impl Unpacker for isize {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        if usize::BITS == u64::BITS {
-            Ok(i64::unpack(reader)? as isize)
-        } else if usize::BITS == u32::BITS {
-            Ok(i32::unpack(reader)? as isize)
-        } else if usize::BITS == u16::BITS {
-            Ok(i16::unpack(reader)? as isize)
-        } else {
-            Ok(i128::unpack(reader)? as isize)
-        }
+        Self::decode(reader)
     }
 }
 
 // --- char ---
 /// Encodes a `char` as its Unicode code point using the same format as `u32`.
 impl Encoder for char {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         let code_point = *self as u32;
         code_point.encode(writer)
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == '\0'
     }
+}
 
-    #[cfg(feature = "pack")]
+impl Packer for char {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        let code_point = *self as u32;
-        code_point.pack(writer)
+        self.encode(writer)
     }
 }
 
@@ -1117,48 +922,50 @@ impl Encoder for char {
 /// # Errors
 /// Returns an error if the code point is not a valid Unicode scalar value.
 impl Decoder for char {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         let code_point = u32::decode(reader)?;
         char::from_u32(code_point).ok_or_else(|| {
             EncoderError::Decode(format!("Invalid Unicode code point: {}", code_point))
         })
     }
+}
 
-    #[cfg(feature = "pack")]
+impl Unpacker for char {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        let code_point = u32::unpack(reader)?;
-        char::from_u32(code_point).ok_or_else(|| {
-            EncoderError::Decode(format!("Invalid Unicode code point: {}", code_point))
-        })
+        Self::decode(reader)
     }
 }
 
 // --- f32/f64 ---
 /// Encodes an `f32` as a tag and 4 bytes (little-endian IEEE 754).
 impl Encoder for f32 {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_F32);
         writer.put_f32_le(*self);
         Ok(())
     }
 
-    /// Packs an `f32` as 4 bytes (little-endian IEEE 754) without a type tag.
-    #[cfg(feature = "pack")]
-    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        writer.put_f32_le(*self);
-        Ok(())
-    }
-
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == 0.0
     }
 }
+
+impl Packer for f32 {
+    /// Packs an `f32` as 4 bytes (little-endian IEEE 754) without a type tag.
+
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+        if *self == 0.0 {
+            writer.put_u8(TAG_NONE);
+        } else {
+            writer.put_u8(TAG_F32);
+            writer.put_f32_le(*self);
+        }
+        Ok(())
+    }
+}
+
 /// Decodes an `f32` from either 4 or 8 bytes (accepts f64 for compatibility with precision loss).
 impl Decoder for f32 {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1185,42 +992,63 @@ impl Decoder for f32 {
             )))
         }
     }
+}
 
-    /// Unpacks an `f32` from 4 bytes (little-endian IEEE 754) without expecting a type tag.
-    #[cfg(feature = "pack")]
+impl Unpacker for f32 {
+    /// Unpacks an `f32` from either TAG_NONE (0.0) or TAG_F32 + 4 bytes (little-endian IEEE 754).
+
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() < 4 {
+        if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
         }
-        let mut bytes = [0u8; 4];
-        reader.copy_to_slice(&mut bytes);
-        Ok(f32::from_le_bytes(bytes))
+        let tag = reader.get_u8();
+        if tag == TAG_NONE {
+            Ok(0.0)
+        } else if tag == TAG_F32 {
+            if reader.remaining() < 4 {
+                return Err(EncoderError::InsufficientData);
+            }
+            let mut bytes = [0u8; 4];
+            reader.copy_to_slice(&mut bytes);
+            Ok(f32::from_le_bytes(bytes))
+        } else {
+            Err(EncoderError::Decode(format!(
+                "Expected f32 tag ({} or {}), got {}",
+                TAG_NONE, TAG_F32, tag
+            )))
+        }
     }
 }
+
 /// Encodes an `f64` as a tag and 8 bytes (little-endian IEEE 754).
 impl Encoder for f64 {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_F64);
         writer.put_f64_le(*self);
         Ok(())
     }
 
-    /// Packs an `f64` as 8 bytes (little-endian IEEE 754) without a type tag.
-    #[cfg(feature = "pack")]
-    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        writer.put_f64_le(*self);
-        Ok(())
-    }
-
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         *self == 0.0
     }
 }
+
+impl Packer for f64 {
+    /// Packs an `f64` as TAG_NONE (for 0.0) or TAG_F64 + 8 bytes (little-endian IEEE 754).
+
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+        if *self == 0.0 {
+            writer.put_u8(TAG_NONE);
+        } else {
+            writer.put_u8(TAG_F64);
+            writer.put_f64_le(*self);
+        }
+        Ok(())
+    }
+}
+
 /// Decodes an `f64` from 8 bytes (f32 cross-decoding not supported).
 impl Decoder for f64 {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1240,23 +1068,37 @@ impl Decoder for f64 {
             )))
         }
     }
+}
 
-    /// Unpacks an `f64` from 8 bytes (little-endian IEEE 754) without expecting a type tag.
-    #[cfg(feature = "pack")]
+impl Unpacker for f64 {
+    /// Unpacks an `f64` from either TAG_NONE (0.0) or TAG_F64 + 8 bytes (little-endian IEEE 754).
+
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() < 8 {
+        if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
         }
-        let mut bytes = [0u8; 8];
-        reader.copy_to_slice(&mut bytes);
-        Ok(f64::from_le_bytes(bytes))
+        let tag = reader.get_u8();
+        if tag == TAG_NONE {
+            Ok(0.0)
+        } else if tag == TAG_F64 {
+            if reader.remaining() < 8 {
+                return Err(EncoderError::InsufficientData);
+            }
+            let mut bytes = [0u8; 8];
+            reader.copy_to_slice(&mut bytes);
+            Ok(f64::from_le_bytes(bytes))
+        } else {
+            Err(EncoderError::Decode(format!(
+                "Expected f64 tag ({} or {}), got {}",
+                TAG_NONE, TAG_F64, tag
+            )))
+        }
     }
 }
 
 // --- String ---
 /// Encodes a `String` as UTF-8 with a length prefix (short strings use a single tag byte).
 impl Encoder for String {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         let len = self.len();
         let max_short = (TAG_STRING_LONG - TAG_STRING_BASE - 1) as usize;
@@ -1272,55 +1114,19 @@ impl Encoder for String {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.is_empty()
     }
+}
 
-    #[cfg(feature = "pack")]
+impl Packer for String {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        let len = self.len();
-        let max_short = (TAG_STRING_LONG - TAG_STRING_BASE - 1) as usize;
-        if len <= max_short {
-            let tag = TAG_STRING_BASE + len as u8; // 9..=29
-            writer.put_u8(tag);
-            writer.put_slice(self.as_bytes());
-        } else {
-            writer.put_u8(TAG_STRING_LONG);
-            len.pack(writer)?;
-            writer.put_slice(self.as_bytes());
-        }
-        Ok(())
+        self.encode(writer)
     }
 }
+
 /// Decodes a `String` from the senax binary format.
 impl Decoder for String {
-    #[cfg(feature = "pack")]
-    fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        let len = if (TAG_STRING_BASE..TAG_STRING_LONG).contains(&tag) {
-            (tag - TAG_STRING_BASE) as usize
-        } else if tag == TAG_STRING_LONG {
-            usize::unpack(reader)?
-        } else {
-            return Err(EncoderError::Decode(format!(
-                "Expected String tag ({}..={}), got {}",
-                TAG_STRING_BASE, TAG_STRING_LONG, tag
-            )));
-        };
-        if reader.remaining() < len {
-            return Err(EncoderError::InsufficientData);
-        }
-        let mut bytes = vec![0u8; len];
-        if len > 0 {
-            reader.copy_to_slice(&mut bytes);
-        }
-        String::from_utf8(bytes).map_err(|e| EncoderError::Decode(e.to_string()))
-    }
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1347,10 +1153,15 @@ impl Decoder for String {
     }
 }
 
+impl Unpacker for String {
+    fn unpack(reader: &mut Bytes) -> Result<Self> {
+        Self::decode(reader)
+    }
+}
+
 // --- Option ---
 /// Encodes an `Option<T>` as a tag byte followed by the value if present.
 impl<T: Encoder> Encoder for Option<T> {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         match self {
             Some(value) => {
@@ -1364,12 +1175,12 @@ impl<T: Encoder> Encoder for Option<T> {
         }
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.is_none()
     }
+}
 
-    #[cfg(feature = "pack")]
+impl<T: Packer> Packer for Option<T> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         match self {
             Some(value) => {
@@ -1383,9 +1194,9 @@ impl<T: Encoder> Encoder for Option<T> {
         }
     }
 }
+
 /// Decodes an `Option<T>` from the senax binary format.
 impl<T: Decoder> Decoder for Option<T> {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData); // Not even a tag
@@ -1393,20 +1204,16 @@ impl<T: Decoder> Decoder for Option<T> {
         let tag = reader.get_u8();
         match tag {
             TAG_NONE => Ok(None),
-            TAG_SOME => {
-                if reader.remaining() == 0 {
-                    // Check before T::decode if only TAG_SOME was present
-                    return Err(EncoderError::InsufficientData);
-                }
-                Ok(Some(T::decode(reader)?))
-            }
+            TAG_SOME => Ok(Some(T::decode(reader)?)),
             other => Err(EncoderError::Decode(format!(
                 "Expected Option tag ({} or {}), got {}",
                 TAG_NONE, TAG_SOME, other
             ))),
         }
     }
-    #[cfg(feature = "pack")]
+}
+
+impl<T: Unpacker> Unpacker for Option<T> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData); // Not even a tag
@@ -1414,13 +1221,7 @@ impl<T: Decoder> Decoder for Option<T> {
         let tag = reader.get_u8();
         match tag {
             TAG_NONE => Ok(None),
-            TAG_SOME => {
-                if reader.remaining() == 0 {
-                    // Check before T::unpack if only TAG_SOME was present
-                    return Err(EncoderError::InsufficientData);
-                }
-                Ok(Some(T::unpack(reader)?))
-            }
+            TAG_SOME => Ok(Some(T::unpack(reader)?)),
             other => Err(EncoderError::Decode(format!(
                 "Expected Option tag ({} or {}), got {}",
                 TAG_NONE, TAG_SOME, other
@@ -1430,25 +1231,8 @@ impl<T: Decoder> Decoder for Option<T> {
 }
 
 // --- Vec<T> ---
-/// Encodes a `Vec<T>` as a length-prefixed sequence. `Vec<u8>` is optimized as binary.
+/// Encodes a `Vec<T>` as a length-prefixed sequence.
 impl<T: Encoder + 'static> Encoder for Vec<T> {
-    #[cfg(feature = "encode")]
-    #[cfg(feature = "vec_u8")]
-    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
-        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<u8>() {
-            // Safety: We've verified T is u8, so this cast is safe
-            let vec_u8 = unsafe { &*(self as *const Vec<T> as *const Vec<u8>) };
-            encode_vec_u8(vec_u8, writer)
-        } else {
-            encode_vec_length(self.len(), writer)?;
-            for item in self {
-                item.encode(writer)?;
-            }
-            Ok(())
-        }
-    }
-    #[cfg(feature = "encode")]
-    #[cfg(not(feature = "vec_u8"))]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         encode_vec_length(self.len(), writer)?;
         for item in self {
@@ -1457,29 +1241,13 @@ impl<T: Encoder + 'static> Encoder for Vec<T> {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.is_empty()
     }
+}
 
-    #[cfg(feature = "pack")]
-    #[cfg(feature = "vec_u8")]
-    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<u8>() {
-            // Safety: We've verified T is u8, so this cast is safe
-            let vec_u8 = unsafe { &*(self as *const Vec<T> as *const Vec<u8>) };
-            encode_vec_u8(vec_u8, writer)
-        } else {
-            encode_vec_length(self.len(), writer)?;
-            for item in self {
-                item.pack(writer)?;
-            }
-            Ok(())
-        }
-    }
-
-    #[cfg(feature = "pack")]
-    #[cfg(not(feature = "vec_u8"))]
+impl<T: Packer + 'static> Packer for Vec<T> {
+    /// Packs a `Vec<T>` as a length-prefixed sequence.
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         encode_vec_length(self.len(), writer)?;
         for item in self {
@@ -1488,42 +1256,9 @@ impl<T: Encoder + 'static> Encoder for Vec<T> {
         Ok(())
     }
 }
+
 /// Decodes a `Vec<T>` from the senax binary format.
 impl<T: Decoder + 'static> Decoder for Vec<T> {
-    #[cfg(feature = "encode")]
-    #[cfg(feature = "vec_u8")]
-    fn decode(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-
-        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<u8>() {
-            if tag == TAG_BINARY {
-                let vec_u8 = decode_vec_u8(reader)?;
-                // Safety: We've verified T is u8, so this cast is safe
-                let ptr = vec_u8.as_ptr() as *mut T;
-                let len = vec_u8.len();
-                let cap = vec_u8.capacity();
-                std::mem::forget(vec_u8);
-                unsafe { Ok(Vec::from_raw_parts(ptr, len, cap)) }
-            } else {
-                Err(EncoderError::Decode(format!(
-                    "Expected Vec<u8> tag ({}), got {}",
-                    TAG_BINARY, tag
-                )))
-            }
-        } else {
-            let len = decode_vec_length(tag, reader)?;
-            let mut vec = Vec::with_capacity(len);
-            for _ in 0..len {
-                vec.push(T::decode(reader)?);
-            }
-            Ok(vec)
-        }
-    }
-    #[cfg(feature = "encode")]
-    #[cfg(not(feature = "vec_u8"))]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1536,40 +1271,10 @@ impl<T: Decoder + 'static> Decoder for Vec<T> {
         }
         Ok(vec)
     }
-    #[cfg(feature = "pack")]
-    #[cfg(feature = "vec_u8")]
-    fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
+}
 
-        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<u8>() {
-            if tag == TAG_BINARY {
-                let vec_u8 = decode_vec_u8(reader)?;
-                // Safety: We've verified T is u8, so this cast is safe
-                let ptr = vec_u8.as_ptr() as *mut T;
-                let len = vec_u8.len();
-                let cap = vec_u8.capacity();
-                std::mem::forget(vec_u8);
-                unsafe { Ok(Vec::from_raw_parts(ptr, len, cap)) }
-            } else {
-                Err(EncoderError::Decode(format!(
-                    "Expected Vec<u8> tag ({}), got {}",
-                    TAG_BINARY, tag
-                )))
-            }
-        } else {
-            let len = decode_vec_length(tag, reader)?;
-            let mut vec = Vec::with_capacity(len);
-            for _ in 0..len {
-                vec.push(T::unpack(reader)?);
-            }
-            Ok(vec)
-        }
-    }
-    #[cfg(feature = "pack")]
-    #[cfg(not(feature = "vec_u8"))]
+impl<T: Unpacker + 'static> Unpacker for Vec<T> {
+    /// Unpacks a `Vec<T>` from the compact format.
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1587,7 +1292,6 @@ impl<T: Decoder + 'static> Decoder for Vec<T> {
 // --- Array ---
 /// Encodes a fixed-size array as a length-prefixed sequence.
 impl<T: Encoder, const N: usize> Encoder for [T; N] {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         encode_vec_length(N, writer)?;
         for item in self {
@@ -1596,12 +1300,12 @@ impl<T: Encoder, const N: usize> Encoder for [T; N] {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.iter().all(|item| item.is_default())
     }
+}
 
-    #[cfg(feature = "pack")]
+impl<T: Packer, const N: usize> Packer for [T; N] {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         encode_vec_length(N, writer)?;
         for item in self {
@@ -1610,9 +1314,9 @@ impl<T: Encoder, const N: usize> Encoder for [T; N] {
         Ok(())
     }
 }
+
 /// Decodes a fixed-size array from the senax binary format.
 impl<T: Decoder, const N: usize> Decoder for [T; N] {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1633,7 +1337,9 @@ impl<T: Decoder, const N: usize> Decoder for [T; N] {
             .try_into()
             .map_err(|_| EncoderError::Decode("Failed to convert Vec to array".to_string()))
     }
-    #[cfg(feature = "pack")]
+}
+
+impl<T: Unpacker, const N: usize> Unpacker for [T; N] {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1662,125 +1368,137 @@ impl<T: Decoder, const N: usize> Decoder for [T; N] {
 /// Each tuple is encoded as a length-prefixed sequence of its elements.
 macro_rules! impl_tuple {
     () => {
-impl Encoder for () {
-    #[cfg(feature = "encode")]
-    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
-        writer.put_u8(TAG_TUPLE);
-        0usize.encode(writer)?;
-        Ok(())
-    }
+        impl Encoder for () {
 
-    #[cfg(feature = "encode")]
-    fn is_default(&self) -> bool {
-        true
-    }
+            fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+                writer.put_u8(TAG_TUPLE);
+                0usize.encode(writer)?;
+                Ok(())
+            }
 
-    #[cfg(feature = "pack")]
-    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        writer.put_u8(TAG_TUPLE);
-        0usize.pack(writer)?;
-        Ok(())
-    }
-}
-impl Decoder for () {
-    #[cfg(feature = "encode")]
-    fn decode(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
+
+            fn is_default(&self) -> bool {
+                true
+            }
         }
-        let tag = reader.get_u8();
-        if tag != TAG_TUPLE {
-            return Err(EncoderError::Decode(format!("Expected Tuple tag ({}), got {}", TAG_TUPLE, tag)));
+
+        impl Packer for () {
+
+            fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+                writer.put_u8(TAG_TUPLE);
+                0usize.pack(writer)?;
+                Ok(())
+            }
         }
-        let len = usize::decode(reader)?;
-        if len != 0 {
-            return Err(EncoderError::Decode(format!("Expected 0-tuple but got {}-tuple", len)));
+
+        impl Decoder for () {
+
+            fn decode(reader: &mut Bytes) -> Result<Self> {
+                if reader.remaining() == 0 {
+                    return Err(EncoderError::InsufficientData);
+                }
+                let tag = reader.get_u8();
+                if tag != TAG_TUPLE {
+                    return Err(EncoderError::Decode(format!("Expected Tuple tag ({}), got {}", TAG_TUPLE, tag)));
+                }
+                let len = usize::decode(reader)?;
+                if len != 0 {
+                    return Err(EncoderError::Decode(format!("Expected 0-tuple but got {}-tuple", len)));
+                }
+                Ok(())
+            }
         }
-        Ok(())
-    }
-    #[cfg(feature = "pack")]
-    fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
+
+        impl Unpacker for () {
+
+            fn unpack(reader: &mut Bytes) -> Result<Self> {
+                if reader.remaining() == 0 {
+                    return Err(EncoderError::InsufficientData);
+                }
+                let tag = reader.get_u8();
+                if tag != TAG_TUPLE {
+                    return Err(EncoderError::Decode(format!("Expected Tuple tag ({}), got {}", TAG_TUPLE, tag)));
+                }
+                let len = usize::unpack(reader)?;
+                if len != 0 {
+                    return Err(EncoderError::Decode(format!("Expected 0-tuple but got {}-tuple", len)));
+                }
+                Ok(())
+            }
         }
-        let tag = reader.get_u8();
-        if tag != TAG_TUPLE {
-            return Err(EncoderError::Decode(format!("Expected Tuple tag ({}), got {}", TAG_TUPLE, tag)));
-        }
-        let len = usize::unpack(reader)?;
-        if len != 0 {
-            return Err(EncoderError::Decode(format!("Expected 0-tuple but got {}-tuple", len)));
-        }
-        Ok(())
-    }
-}
     };
-    ($($T:ident : $idx:tt),+) => {
+    ($($T:ident: $idx:tt),+) => {
         impl<$($T: Encoder),+> Encoder for ($($T,)+) {
-    #[cfg(feature = "encode")]
-    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
-        writer.put_u8(TAG_TUPLE);
-        let count = count_args!($($T),+);
-        count.encode(writer)?;
-        $(
-            self.$idx.encode(writer)?;
-        )+
-        Ok(())
-    }
 
-    #[cfg(feature = "encode")]
-    fn is_default(&self) -> bool {
-        $(self.$idx.is_default())&&+
-    }
+            fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+                writer.put_u8(TAG_TUPLE);
+                let len = count_args!($($T),+);
+                len.encode(writer)?;
+                $(
+                    self.$idx.encode(writer)?;
+                )+
+                Ok(())
+            }
 
-    #[cfg(feature = "pack")]
-    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
-        writer.put_u8(TAG_TUPLE);
-        let count = count_args!($($T),+);
-        count.pack(writer)?;
-        $(
-            self.$idx.pack(writer)?;
-        )+
-        Ok(())
-    }
-}
+
+            fn is_default(&self) -> bool {
+                $(self.$idx.is_default())&&+
+            }
+        }
+
+        impl<$($T: Packer),+> Packer for ($($T,)+) {
+
+            fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+                writer.put_u8(TAG_TUPLE);
+                let len = count_args!($($T),+);
+                len.pack(writer)?;
+                $(
+                    self.$idx.pack(writer)?;
+                )+
+                Ok(())
+            }
+        }
+
         impl<$($T: Decoder),+> Decoder for ($($T,)+) {
-    #[cfg(feature = "encode")]
-    fn decode(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
+
+            fn decode(reader: &mut Bytes) -> Result<Self> {
+                if reader.remaining() == 0 {
+                    return Err(EncoderError::InsufficientData);
+                }
+                let tag = reader.get_u8();
+                if tag != TAG_TUPLE {
+                    return Err(EncoderError::Decode(format!("Expected Tuple tag ({}), got {}", TAG_TUPLE, tag)));
+                }
+                let len = usize::decode(reader)?;
+                let expected_len = count_args!($($T),+);
+                if len != expected_len {
+                    return Err(EncoderError::Decode(format!("Expected {}-tuple but got {}-tuple", expected_len, len)));
+                }
+                Ok(($(
+                    $T::decode(reader)?,
+                )+))
+            }
         }
-        let tag = reader.get_u8();
-        if tag != TAG_TUPLE {
-            return Err(EncoderError::Decode(format!("Expected Tuple tag ({}), got {}", TAG_TUPLE, tag)));
-        }
-        let len = usize::decode(reader)?;
-        let expected_len = count_args!($($T),+);
-        if len != expected_len {
-            return Err(EncoderError::Decode(format!("Expected {}-tuple but got {}-tuple", expected_len, len)));
-        }
-        Ok(($(
-            $T::decode(reader)?,
-        )+))
-    }
-    #[cfg(feature = "pack")]
-    fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        if tag != TAG_TUPLE {
-            return Err(EncoderError::Decode(format!("Expected Tuple tag ({}), got {}", TAG_TUPLE, tag)));
-        }
-        let len = usize::unpack(reader)?;
-        let expected_len = count_args!($($T),+);
-        if len != expected_len {
-            return Err(EncoderError::Decode(format!("Expected {}-tuple but got {}-tuple", expected_len, len)));
-        }
-        Ok(($(
-            $T::unpack(reader)?,
-        )+))
-    }
+
+        impl<$($T: Unpacker),+> Unpacker for ($($T,)+) {
+
+            fn unpack(reader: &mut Bytes) -> Result<Self> {
+                if reader.remaining() == 0 {
+                    return Err(EncoderError::InsufficientData);
+                }
+                let tag = reader.get_u8();
+                if tag != TAG_TUPLE {
+                    return Err(EncoderError::Decode(format!("Expected Tuple tag ({}), got {}", TAG_TUPLE, tag)));
+                }
+                let len = usize::unpack(reader)?;
+                let expected_len = count_args!($($T),+);
+                if len != expected_len {
+                    return Err(EncoderError::Decode(format!("Expected {}-tuple but got {}-tuple", expected_len, len)));
+                }
+                Ok(($(
+                    $T::unpack(reader)?,
+                )+))
+            }
         }
     };
 }
@@ -1808,7 +1526,6 @@ impl_tuple!(T0: 0, T1: 1, T2: 2, T3: 3, T4: 4, T5: 5, T6: 6, T7: 7, T8: 8, T9: 9
 // --- Map (HashMap) ---
 /// Encodes a map as a length-prefixed sequence of key-value pairs.
 impl<K: Encoder, V: Encoder> Encoder for HashMap<K, V> {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_MAP);
         let len = self.len();
@@ -1820,12 +1537,12 @@ impl<K: Encoder, V: Encoder> Encoder for HashMap<K, V> {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.is_empty()
     }
+}
 
-    #[cfg(feature = "pack")]
+impl<K: Packer, V: Packer> Packer for HashMap<K, V> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_MAP);
         let len = self.len();
@@ -1837,9 +1554,9 @@ impl<K: Encoder, V: Encoder> Encoder for HashMap<K, V> {
         Ok(())
     }
 }
+
 /// Decodes a map from the senax binary format.
 impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for HashMap<K, V> {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1860,7 +1577,9 @@ impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for HashMap<K, V> {
         }
         Ok(map)
     }
-    #[cfg(feature = "pack")]
+}
+
+impl<K: Unpacker + Eq + std::hash::Hash, V: Unpacker> Unpacker for HashMap<K, V> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1925,7 +1644,7 @@ pub fn read_u64_le(reader: &mut Bytes) -> Result<u64> {
 ///
 /// # Errors
 /// Returns an error if the value cannot be skipped (e.g., insufficient data).
-#[cfg(feature = "encode")]
+
 pub fn skip_value(reader: &mut Bytes) -> Result<()> {
     if reader.remaining() == 0 {
         return Err(EncoderError::InsufficientData);
@@ -2173,7 +1892,6 @@ pub fn skip_value(reader: &mut Bytes) -> Result<()> {
 // --- HashSet, BTreeSet, IndexSet ---
 /// Encodes a set as a length-prefixed sequence of elements.
 impl<T: Encoder + Eq + std::hash::Hash> Encoder for HashSet<T> {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         encode_vec_length(self.len(), writer)?;
         for v in self {
@@ -2182,12 +1900,12 @@ impl<T: Encoder + Eq + std::hash::Hash> Encoder for HashSet<T> {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.is_empty()
     }
+}
 
-    #[cfg(feature = "pack")]
+impl<T: Packer + Eq + std::hash::Hash> Packer for HashSet<T> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         encode_vec_length(self.len(), writer)?;
         for v in self {
@@ -2196,14 +1914,16 @@ impl<T: Encoder + Eq + std::hash::Hash> Encoder for HashSet<T> {
         Ok(())
     }
 }
+
 /// Decodes a set from the senax binary format.
 impl<T: Decoder + Eq + std::hash::Hash + 'static> Decoder for HashSet<T> {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         let vec: Vec<T> = Vec::decode(reader)?;
         Ok(vec.into_iter().collect())
     }
-    #[cfg(feature = "pack")]
+}
+
+impl<T: Unpacker + Eq + std::hash::Hash + 'static> Unpacker for HashSet<T> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         let vec: Vec<T> = Vec::unpack(reader)?;
         Ok(vec.into_iter().collect())
@@ -2211,7 +1931,6 @@ impl<T: Decoder + Eq + std::hash::Hash + 'static> Decoder for HashSet<T> {
 }
 // --- BTreeSet ---
 impl<T: Encoder + Ord> Encoder for BTreeSet<T> {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         encode_vec_length(self.len(), writer)?;
         for v in self {
@@ -2220,12 +1939,12 @@ impl<T: Encoder + Ord> Encoder for BTreeSet<T> {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.is_empty()
     }
+}
 
-    #[cfg(feature = "pack")]
+impl<T: Packer + Ord> Packer for BTreeSet<T> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         encode_vec_length(self.len(), writer)?;
         for v in self {
@@ -2234,13 +1953,15 @@ impl<T: Encoder + Ord> Encoder for BTreeSet<T> {
         Ok(())
     }
 }
+
 impl<T: Decoder + Ord + 'static> Decoder for BTreeSet<T> {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         let vec: Vec<T> = Vec::decode(reader)?;
         Ok(vec.into_iter().collect())
     }
-    #[cfg(feature = "pack")]
+}
+
+impl<T: Unpacker + Ord + 'static> Unpacker for BTreeSet<T> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         let vec: Vec<T> = Vec::unpack(reader)?;
         Ok(vec.into_iter().collect())
@@ -2248,7 +1969,6 @@ impl<T: Decoder + Ord + 'static> Decoder for BTreeSet<T> {
 }
 // --- BTreeMap ---
 impl<K: Encoder + Ord, V: Encoder> Encoder for BTreeMap<K, V> {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_MAP);
         let len = self.len();
@@ -2260,12 +1980,12 @@ impl<K: Encoder + Ord, V: Encoder> Encoder for BTreeMap<K, V> {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.is_empty()
     }
+}
 
-    #[cfg(feature = "pack")]
+impl<K: Packer + Ord, V: Packer> Packer for BTreeMap<K, V> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_MAP);
         let len = self.len();
@@ -2277,8 +1997,8 @@ impl<K: Encoder + Ord, V: Encoder> Encoder for BTreeMap<K, V> {
         Ok(())
     }
 }
+
 impl<K: Decoder + Ord, V: Decoder> Decoder for BTreeMap<K, V> {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -2299,7 +2019,9 @@ impl<K: Decoder + Ord, V: Decoder> Decoder for BTreeMap<K, V> {
         }
         Ok(map)
     }
-    #[cfg(feature = "pack")]
+}
+
+impl<K: Unpacker + Ord, V: Unpacker> Unpacker for BTreeMap<K, V> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -2324,7 +2046,6 @@ impl<K: Decoder + Ord, V: Decoder> Decoder for BTreeMap<K, V> {
 
 // --- Bytes ---
 impl Encoder for Bytes {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_BINARY);
         let len = self.len();
@@ -2333,12 +2054,12 @@ impl Encoder for Bytes {
         Ok(())
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         self.is_empty()
     }
+}
 
-    #[cfg(feature = "pack")]
+impl Packer for Bytes {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_BINARY);
         let len = self.len();
@@ -2347,8 +2068,8 @@ impl Encoder for Bytes {
         Ok(())
     }
 }
+
 impl Decoder for Bytes {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -2373,7 +2094,9 @@ impl Decoder for Bytes {
 
         Ok(reader.split_to(len))
     }
-    #[cfg(feature = "pack")]
+}
+
+impl Unpacker for Bytes {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -2403,17 +2126,16 @@ impl Decoder for Bytes {
 // --- Arc<T> ---
 /// Encodes an `Arc<T>` by encoding the inner value.
 impl<T: Encoder> Encoder for Arc<T> {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         (**self).encode(writer)
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         T::is_default(self)
     }
+}
 
-    #[cfg(feature = "pack")]
+impl<T: Packer> Packer for Arc<T> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         (**self).pack(writer)
     }
@@ -2421,11 +2143,12 @@ impl<T: Encoder> Encoder for Arc<T> {
 
 /// Decodes an `Arc<T>` by decoding the inner value and wrapping it in an Arc.
 impl<T: Decoder> Decoder for Arc<T> {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         Ok(Arc::new(T::decode(reader)?))
     }
-    #[cfg(feature = "pack")]
+}
+
+impl<T: Unpacker> Unpacker for Arc<T> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         Ok(Arc::new(T::unpack(reader)?))
     }
@@ -2476,17 +2199,16 @@ pub fn read_field_id_optimized(reader: &mut Bytes) -> Result<u64> {
 
 /// Implementation for references - delegates to the referenced value
 impl<T: Encoder> Encoder for &T {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         (*self).encode(writer)
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         (*self).is_default()
     }
+}
 
-    #[cfg(feature = "pack")]
+impl<T: Packer> Packer for &T {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         (*self).pack(writer)
     }
@@ -2495,17 +2217,16 @@ impl<T: Encoder> Encoder for &T {
 // --- Box<T> ---
 /// Encodes a `Box<T>` by encoding the inner value.
 impl<T: Encoder> Encoder for Box<T> {
-    #[cfg(feature = "encode")]
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
         (**self).encode(writer)
     }
 
-    #[cfg(feature = "encode")]
     fn is_default(&self) -> bool {
         T::is_default(self)
     }
+}
 
-    #[cfg(feature = "pack")]
+impl<T: Packer> Packer for Box<T> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         (**self).pack(writer)
     }
@@ -2513,42 +2234,15 @@ impl<T: Encoder> Encoder for Box<T> {
 
 /// Decodes a `Box<T>` by decoding the inner value and wrapping it in a Box.
 impl<T: Decoder> Decoder for Box<T> {
-    #[cfg(feature = "encode")]
     fn decode(reader: &mut Bytes) -> Result<Self> {
         Ok(Box::new(T::decode(reader)?))
     }
-    #[cfg(feature = "pack")]
+}
+
+impl<T: Unpacker> Unpacker for Box<T> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         Ok(Box::new(T::unpack(reader)?))
     }
-}
-
-/// Encodes a `Vec<u8>` using the optimized binary format.
-#[cfg(feature = "vec_u8")]
-fn encode_vec_u8(vec: &[u8], writer: &mut BytesMut) -> Result<()> {
-    writer.put_u8(TAG_BINARY);
-    let len = vec.len();
-    #[cfg(feature = "encode")]
-    len.encode(writer)?;
-    #[cfg(not(feature = "encode"))]
-    len.pack(writer)?;
-    let bytes = unsafe { std::slice::from_raw_parts(vec.as_ptr(), vec.len()) };
-    writer.put_slice(bytes);
-    Ok(())
-}
-
-/// Decodes a `Vec<u8>` from the optimized binary format.
-#[cfg(feature = "vec_u8")]
-fn decode_vec_u8(reader: &mut Bytes) -> Result<Vec<u8>> {
-    #[cfg(feature = "encode")]
-    let len = usize::decode(reader)?;
-    #[cfg(not(feature = "encode"))]
-    let len = usize::unpack(reader)?;
-    let mut vec = vec![0u8; len];
-    if len > 0 {
-        reader.copy_to_slice(&mut vec);
-    }
-    Ok(vec)
 }
 
 /// Encodes the length for array/vec/set format.
@@ -2560,10 +2254,7 @@ pub(crate) fn encode_vec_length(len: usize, writer: &mut BytesMut) -> Result<()>
         writer.put_u8(tag);
     } else {
         writer.put_u8(TAG_ARRAY_VEC_SET_LONG);
-        #[cfg(feature = "encode")]
         len.encode(writer)?;
-        #[cfg(not(feature = "encode"))]
-        len.pack(writer)?;
     }
     Ok(())
 }
@@ -2574,10 +2265,7 @@ pub(crate) fn decode_vec_length(tag: u8, reader: &mut Bytes) -> Result<usize> {
     if (TAG_ARRAY_VEC_SET_BASE..TAG_ARRAY_VEC_SET_LONG).contains(&tag) {
         Ok((tag - TAG_ARRAY_VEC_SET_BASE) as usize)
     } else if tag == TAG_ARRAY_VEC_SET_LONG {
-        #[cfg(feature = "encode")]
-        {usize::decode(reader)}
-        #[cfg(not(feature = "encode"))]
-        {usize::unpack(reader)}
+        usize::decode(reader)
     } else {
         Err(EncoderError::Decode(format!(
             "Expected Vec tag ({}..={}), got {}",

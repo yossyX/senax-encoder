@@ -1,5 +1,3 @@
-#![cfg(feature = "encode")]
-
 use bytes::{Bytes, BytesMut};
 #[cfg(feature = "chrono")]
 use chrono::{DateTime, Local, NaiveDate, NaiveTime, Utc};
