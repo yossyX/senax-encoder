@@ -3,7 +3,7 @@ use ahash::{AHashMap, AHashSet};
 #[allow(unused_imports)]
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 #[cfg(feature = "chrono")]
-use chrono::{DateTime, Local, NaiveDate, NaiveTime, Timelike, Utc};
+use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
 #[cfg(feature = "fxhash")]
 use fxhash::{FxHashMap, FxHashSet};
 #[cfg(feature = "indexmap")]
@@ -85,17 +85,7 @@ impl<K: Encoder + Eq + std::hash::Hash, V: Encoder> Encoder for IndexMap<K, V> {
 #[cfg(feature = "indexmap")]
 impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for IndexMap<K, V> {
     fn decode(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        if tag != TAG_MAP {
-            return Err(EncoderError::Decode(format!(
-                "Expected Map tag ({}), got {}",
-                TAG_MAP, tag
-            )));
-        }
-        let len = usize::decode(reader)?;
+        let len = read_map_header(reader)?;
         let mut map = IndexMap::with_capacity(len);
         for _ in 0..len {
             let k = K::decode(reader)?;
@@ -110,7 +100,7 @@ impl<K: Packer + Eq + std::hash::Hash, V: Packer> Packer for IndexMap<K, V> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_MAP);
         let len = self.len();
-        len.pack(writer)?;
+        len.encode(writer)?;
         for (k, v) in self {
             k.pack(writer)?;
             v.pack(writer)?;
@@ -121,17 +111,7 @@ impl<K: Packer + Eq + std::hash::Hash, V: Packer> Packer for IndexMap<K, V> {
 #[cfg(feature = "indexmap")]
 impl<K: Unpacker + Eq + std::hash::Hash, V: Unpacker> Unpacker for IndexMap<K, V> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        if tag != TAG_MAP {
-            return Err(EncoderError::Decode(format!(
-                "Expected Map tag ({}), got {}",
-                TAG_MAP, tag
-            )));
-        }
-        let len = usize::unpack(reader)?;
+        let len = read_map_header(reader)?;
         let mut map = IndexMap::with_capacity(len);
         for _ in 0..len {
             let k = K::unpack(reader)?;
@@ -467,6 +447,95 @@ impl Packer for NaiveTime {
         seconds_from_midnight.pack(writer)?;
         nanoseconds.pack(writer)?;
         Ok(())
+    }
+}
+
+// --- NaiveDateTime ---
+#[cfg(feature = "chrono")]
+impl Encoder for NaiveDateTime {
+    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+        writer.put_u8(TAG_CHRONO_NAIVE_DATETIME);
+        // Store as seconds and nanoseconds since Unix epoch (1970-01-01 00:00:00)
+        let timestamp_seconds = self.and_utc().timestamp();
+        let timestamp_nanos = self.and_utc().timestamp_subsec_nanos();
+        timestamp_seconds.encode(writer)?;
+        timestamp_nanos.encode(writer)?;
+        Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        *self == NaiveDateTime::default()
+    }
+}
+
+#[cfg(feature = "chrono")]
+impl Decoder for NaiveDateTime {
+    fn decode(reader: &mut Bytes) -> Result<Self> {
+        if reader.remaining() == 0 {
+            return Err(EncoderError::InsufficientData);
+        }
+        let tag = reader.get_u8();
+        if tag != TAG_CHRONO_NAIVE_DATETIME {
+            return Err(EncoderError::Decode(format!(
+                "Expected NaiveDateTime tag ({}), got {}",
+                TAG_CHRONO_NAIVE_DATETIME, tag
+            )));
+        }
+        let timestamp_seconds = i64::decode(reader)?;
+        let timestamp_nanos = u32::decode(reader)?;
+        Ok(DateTime::from_timestamp(timestamp_seconds, timestamp_nanos)
+            .ok_or_else(|| {
+                EncoderError::Decode(format!(
+                    "Invalid timestamp: {} seconds, {} nanos",
+                    timestamp_seconds, timestamp_nanos
+                ))
+            })?
+            .naive_utc())
+    }
+}
+
+#[cfg(feature = "chrono")]
+impl Packer for NaiveDateTime {
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+        if *self == NaiveDateTime::default() {
+            writer.put_u8(TAG_NONE);
+        } else {
+            writer.put_u8(TAG_CHRONO_NAIVE_DATETIME);
+            let timestamp_seconds = self.and_utc().timestamp();
+            let timestamp_nanos = self.and_utc().timestamp_subsec_nanos();
+            timestamp_seconds.pack(writer)?;
+            timestamp_nanos.pack(writer)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "chrono")]
+impl Unpacker for NaiveDateTime {
+    fn unpack(reader: &mut Bytes) -> Result<Self> {
+        if reader.remaining() == 0 {
+            return Err(EncoderError::InsufficientData);
+        }
+        let tag = reader.get_u8();
+        match tag {
+            TAG_NONE => Ok(NaiveDateTime::default()),
+            TAG_CHRONO_NAIVE_DATETIME => {
+                let timestamp_seconds = i64::unpack(reader)?;
+                let timestamp_nanos = u32::unpack(reader)?;
+                Ok(DateTime::from_timestamp(timestamp_seconds, timestamp_nanos)
+                    .ok_or_else(|| {
+                        EncoderError::Decode(format!(
+                            "Invalid timestamp: {} seconds, {} nanos",
+                            timestamp_seconds, timestamp_nanos
+                        ))
+                    })?
+                    .naive_utc())
+            }
+            _ => Err(EncoderError::Decode(format!(
+                "Expected NaiveDateTime tag ({} or {}), got {}",
+                TAG_NONE, TAG_CHRONO_NAIVE_DATETIME, tag
+            ))),
+        }
     }
 }
 
@@ -844,7 +913,7 @@ impl<K: Packer + Eq + std::hash::Hash, V: Packer> Packer for FxHashMap<K, V> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_MAP);
         let len = self.len();
-        len.pack(writer)?;
+        len.encode(writer)?;
         for (k, v) in self {
             k.pack(writer)?;
             v.pack(writer)?;
@@ -855,17 +924,7 @@ impl<K: Packer + Eq + std::hash::Hash, V: Packer> Packer for FxHashMap<K, V> {
 #[cfg(feature = "fxhash")]
 impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for FxHashMap<K, V> {
     fn decode(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        if tag != TAG_MAP {
-            return Err(EncoderError::Decode(format!(
-                "Expected Map tag ({}), got {}",
-                TAG_MAP, tag
-            )));
-        }
-        let len = usize::decode(reader)?;
+        let len = read_map_header(reader)?;
         let mut map = FxHashMap::with_capacity_and_hasher(len, Default::default());
         for _ in 0..len {
             let k = K::decode(reader)?;
@@ -878,17 +937,7 @@ impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for FxHashMap<K, V> 
 #[cfg(feature = "fxhash")]
 impl<K: Unpacker + Eq + std::hash::Hash, V: Unpacker> Unpacker for FxHashMap<K, V> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        if tag != TAG_MAP {
-            return Err(EncoderError::Decode(format!(
-                "Expected Map tag ({}), got {}",
-                TAG_MAP, tag
-            )));
-        }
-        let len = usize::unpack(reader)?;
+        let len = read_map_header(reader)?;
         let mut map = FxHashMap::with_capacity_and_hasher(len, Default::default());
         for _ in 0..len {
             let k = K::unpack(reader)?;
@@ -922,7 +971,7 @@ impl<K: Packer + Eq + std::hash::Hash, V: Packer> Packer for AHashMap<K, V> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_MAP);
         let len = self.len();
-        len.pack(writer)?;
+        len.encode(writer)?;
         for (k, v) in self {
             k.pack(writer)?;
             v.pack(writer)?;
@@ -933,17 +982,7 @@ impl<K: Packer + Eq + std::hash::Hash, V: Packer> Packer for AHashMap<K, V> {
 #[cfg(feature = "ahash")]
 impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for AHashMap<K, V> {
     fn decode(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        if tag != TAG_MAP {
-            return Err(EncoderError::Decode(format!(
-                "Expected Map tag ({}), got {}",
-                TAG_MAP, tag
-            )));
-        }
-        let len = usize::decode(reader)?;
+        let len = read_map_header(reader)?;
         let mut map = AHashMap::with_capacity(len);
         for _ in 0..len {
             let k = K::decode(reader)?;
@@ -956,17 +995,7 @@ impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for AHashMap<K, V> {
 #[cfg(feature = "ahash")]
 impl<K: Unpacker + Eq + std::hash::Hash, V: Unpacker> Unpacker for AHashMap<K, V> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        if tag != TAG_MAP {
-            return Err(EncoderError::Decode(format!(
-                "Expected Map tag ({}), got {}",
-                TAG_MAP, tag
-            )));
-        }
-        let len = usize::unpack(reader)?;
+        let len = read_map_header(reader)?;
         let mut map = AHashMap::with_capacity(len);
         for _ in 0..len {
             let k = K::unpack(reader)?;

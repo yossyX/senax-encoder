@@ -307,7 +307,7 @@ fn is_option_type(ty: &Type) -> bool {
             .path
             .segments
             .last()
-            .map_or(false, |seg| seg.ident == "Option")
+            .is_some_and(|seg| seg.ident == "Option")
     } else {
         false
     }
@@ -323,7 +323,7 @@ fn extract_inner_type_from_option(ty: &Type) -> Option<&Type> {
             .path
             .segments
             .last()
-            .map_or(false, |seg| seg.ident == "Option")
+            .is_some_and(|seg| seg.ident == "Option")
         {
             if let PathArguments::AngleBracketed(args) =
                 &type_path.path.segments.last().unwrap().arguments

@@ -292,6 +292,14 @@ Epoch: 1970-01-01
 [TAG_CHRONO_NAIVE_TIME] [seconds_from_midnight:u32] [nanoseconds:u32]
 ```
 
+#### NaiveDateTime (chrono feature)
+
+**Format:**
+```
+[TAG_CHRONO_NAIVE_DATETIME] [seconds:i64] [nanos:u32]
+```
+Stores as seconds and nanoseconds since Unix epoch (1970-01-01 00:00:00 UTC).
+
 #### Decimal (rust_decimal feature)
 
 **Format:**

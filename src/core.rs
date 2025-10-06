@@ -1,12 +1,12 @@
-use crate::*;
+//! Type tags used in the senax binary format.
+//!
+//! These tags are written as the first byte of each encoded value to identify its type and optimize decoding.
+//! Most users do not need to use these directly.
+//!
+//! - Primitives, Option, String, Vec, arrays, maps, structs, enums, and feature types each have their own tag(s).
+//! - Tags are stable and part of the wire format.
 
-/// Type tags used in the senax binary format.
-///
-/// These tags are written as the first byte of each encoded value to identify its type and optimize decoding.
-/// Most users do not need to use these directly.
-///
-/// - Primitives, Option, String, Vec, arrays, maps, structs, enums, and feature types each have their own tag(s).
-/// - Tags are stable and part of the wire format.
+use crate::*;
 
 ///< 0 for numbers, false for bool
 pub const TAG_ZERO: u8 = 0;
@@ -56,6 +56,8 @@ pub const TAG_CHRONO_DATETIME: u8 = 197;
 pub const TAG_CHRONO_NAIVE_DATE: u8 = 198;
 ///< chrono::NaiveTime
 pub const TAG_CHRONO_NAIVE_TIME: u8 = 199;
+///< chrono::NaiveDateTime
+pub const TAG_CHRONO_NAIVE_DATETIME: u8 = 208;
 ///< rust_decimal::Decimal
 pub const TAG_DECIMAL: u8 = 200;
 ///< uuid::Uuid, ulid::Ulid
@@ -132,7 +134,6 @@ impl Unpacker for bool {
 /// # Errors
 /// Returns an error if the tag is not valid for a `u8`.
 #[inline]
-
 fn decode_u8_from_tag(tag: u8, reader: &mut Bytes) -> Result<u8> {
     if (TAG_ZERO..=TAG_U8_127).contains(&tag) {
         Ok(tag - TAG_ZERO)
@@ -153,7 +154,6 @@ fn decode_u8_from_tag(tag: u8, reader: &mut Bytes) -> Result<u8> {
 }
 /// Decodes a `u16` value from a tag and buffer.
 /// Used internally for compact integer decoding.
-#[inline(never)]
 fn decode_u16_from_tag(tag: u8, reader: &mut Bytes) -> Result<u16> {
     if (TAG_ZERO..=TAG_U8_127).contains(&tag) {
         Ok((tag - TAG_ZERO) as u16)
@@ -237,7 +237,6 @@ fn decode_u64_from_tag(tag: u8, reader: &mut Bytes) -> Result<u64> {
 }
 /// Decodes a `u128` value from a tag and buffer.
 /// Used internally for compact integer decoding.
-#[inline(never)]
 fn decode_u128_from_tag(tag: u8, reader: &mut Bytes) -> Result<u128> {
     if (TAG_ZERO..=TAG_U8_127).contains(&tag) {
         Ok((tag - TAG_ZERO) as u128)
@@ -952,7 +951,6 @@ impl Encoder for f32 {
 
 impl Packer for f32 {
     /// Packs an `f32` as 4 bytes (little-endian IEEE 754) without a type tag.
-
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         if *self == 0.0 {
             writer.put_u8(TAG_NONE);
@@ -996,7 +994,6 @@ impl Decoder for f32 {
 
 impl Unpacker for f32 {
     /// Unpacks an `f32` from either TAG_NONE (0.0) or TAG_F32 + 4 bytes (little-endian IEEE 754).
-
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1035,7 +1032,6 @@ impl Encoder for f64 {
 
 impl Packer for f64 {
     /// Packs an `f64` as TAG_NONE (for 0.0) or TAG_F64 + 8 bytes (little-endian IEEE 754).
-
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         if *self == 0.0 {
             writer.put_u8(TAG_NONE);
@@ -1072,7 +1068,6 @@ impl Decoder for f64 {
 
 impl Unpacker for f64 {
     /// Unpacks an `f64` from either TAG_NONE (0.0) or TAG_F64 + 8 bytes (little-endian IEEE 754).
-
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
@@ -1260,11 +1255,7 @@ impl<T: Packer + 'static> Packer for Vec<T> {
 /// Decodes a `Vec<T>` from the senax binary format.
 impl<T: Decoder + 'static> Decoder for Vec<T> {
     fn decode(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        let len = decode_vec_length(tag, reader)?;
+        let len = decode_vec_length(reader)?;
         let mut vec = Vec::with_capacity(len);
         for _ in 0..len {
             vec.push(T::decode(reader)?);
@@ -1276,11 +1267,7 @@ impl<T: Decoder + 'static> Decoder for Vec<T> {
 impl<T: Unpacker + 'static> Unpacker for Vec<T> {
     /// Unpacks a `Vec<T>` from the compact format.
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        let len = decode_vec_length(tag, reader)?;
+        let len = decode_vec_length(reader)?;
         let mut vec = Vec::with_capacity(len);
         for _ in 0..len {
             vec.push(T::unpack(reader)?);
@@ -1318,11 +1305,7 @@ impl<T: Packer, const N: usize> Packer for [T; N] {
 /// Decodes a fixed-size array from the senax binary format.
 impl<T: Decoder, const N: usize> Decoder for [T; N] {
     fn decode(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        let len = decode_vec_length(tag, reader)?;
+        let len = decode_vec_length(reader)?;
         if len != N {
             return Err(EncoderError::Decode(format!(
                 "Array length mismatch: expected {}, got {}",
@@ -1341,11 +1324,7 @@ impl<T: Decoder, const N: usize> Decoder for [T; N] {
 
 impl<T: Unpacker, const N: usize> Unpacker for [T; N] {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        let len = decode_vec_length(tag, reader)?;
+        let len = decode_vec_length(reader)?;
         if len != N {
             return Err(EncoderError::Decode(format!(
                 "Array length mismatch: expected {}, got {}",
@@ -1419,7 +1398,7 @@ macro_rules! impl_tuple {
                 if tag != TAG_TUPLE {
                     return Err(EncoderError::Decode(format!("Expected Tuple tag ({}), got {}", TAG_TUPLE, tag)));
                 }
-                let len = usize::unpack(reader)?;
+                let len = usize::decode(reader)?;
                 if len != 0 {
                     return Err(EncoderError::Decode(format!("Expected 0-tuple but got {}-tuple", len)));
                 }
@@ -1451,7 +1430,7 @@ macro_rules! impl_tuple {
             fn pack(&self, writer: &mut BytesMut) -> Result<()> {
                 writer.put_u8(TAG_TUPLE);
                 let len = count_args!($($T),+);
-                len.pack(writer)?;
+                len.encode(writer)?;
                 $(
                     self.$idx.pack(writer)?;
                 )+
@@ -1490,7 +1469,7 @@ macro_rules! impl_tuple {
                 if tag != TAG_TUPLE {
                     return Err(EncoderError::Decode(format!("Expected Tuple tag ({}), got {}", TAG_TUPLE, tag)));
                 }
-                let len = usize::unpack(reader)?;
+                let len = usize::decode(reader)?;
                 let expected_len = count_args!($($T),+);
                 if len != expected_len {
                     return Err(EncoderError::Decode(format!("Expected {}-tuple but got {}-tuple", expected_len, len)));
@@ -1546,7 +1525,7 @@ impl<K: Packer, V: Packer> Packer for HashMap<K, V> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_MAP);
         let len = self.len();
-        len.pack(writer)?;
+        len.encode(writer)?;
         for (k, v) in self {
             k.pack(writer)?;
             v.pack(writer)?;
@@ -1558,17 +1537,7 @@ impl<K: Packer, V: Packer> Packer for HashMap<K, V> {
 /// Decodes a map from the senax binary format.
 impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for HashMap<K, V> {
     fn decode(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        if tag != TAG_MAP {
-            return Err(EncoderError::Decode(format!(
-                "Expected Map tag ({}), got {}",
-                TAG_MAP, tag
-            )));
-        }
-        let len = usize::decode(reader)?;
+        let len = read_map_header(reader)?;
         let mut map = HashMap::with_capacity(len);
         for _ in 0..len {
             let k = K::decode(reader)?;
@@ -1581,17 +1550,7 @@ impl<K: Decoder + Eq + std::hash::Hash, V: Decoder> Decoder for HashMap<K, V> {
 
 impl<K: Unpacker + Eq + std::hash::Hash, V: Unpacker> Unpacker for HashMap<K, V> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        if tag != TAG_MAP {
-            return Err(EncoderError::Decode(format!(
-                "Expected Map tag ({}), got {}",
-                TAG_MAP, tag
-            )));
-        }
-        let len = usize::unpack(reader)?;
+        let len = read_map_header(reader)?;
         let mut map = HashMap::with_capacity(len);
         for _ in 0..len {
             let k = K::unpack(reader)?;
@@ -1644,7 +1603,6 @@ pub fn read_u64_le(reader: &mut Bytes) -> Result<u64> {
 ///
 /// # Errors
 /// Returns an error if the value cannot be skipped (e.g., insufficient data).
-
 pub fn skip_value(reader: &mut Bytes) -> Result<()> {
     if reader.remaining() == 0 {
         return Err(EncoderError::InsufficientData);
@@ -1809,6 +1767,14 @@ pub fn skip_value(reader: &mut Bytes) -> Result<()> {
             } // Approximation for u32 + u32
             let _seconds_from_midnight = u32::decode(reader)?;
             let _nanoseconds = u32::decode(reader)?;
+            Ok(())
+        }
+        TAG_CHRONO_NAIVE_DATETIME => {
+            if reader.remaining() < 12 {
+                return Err(EncoderError::InsufficientData);
+            } // Approximation for i64 + u32
+            let _timestamp_seconds = i64::decode(reader)?;
+            let _timestamp_nanos = u32::decode(reader)?;
             Ok(())
         }
         TAG_DECIMAL => {
@@ -1989,7 +1955,7 @@ impl<K: Packer + Ord, V: Packer> Packer for BTreeMap<K, V> {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_MAP);
         let len = self.len();
-        len.pack(writer)?;
+        len.encode(writer)?;
         for (k, v) in self {
             k.pack(writer)?;
             v.pack(writer)?;
@@ -2000,17 +1966,7 @@ impl<K: Packer + Ord, V: Packer> Packer for BTreeMap<K, V> {
 
 impl<K: Decoder + Ord, V: Decoder> Decoder for BTreeMap<K, V> {
     fn decode(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        if tag != TAG_MAP {
-            return Err(EncoderError::Decode(format!(
-                "Expected Map tag ({}), got {}",
-                TAG_MAP, tag
-            )));
-        }
-        let len = usize::decode(reader)?;
+        let len = read_map_header(reader)?;
         let mut map = BTreeMap::new();
         for _ in 0..len {
             let k = K::decode(reader)?;
@@ -2023,17 +1979,7 @@ impl<K: Decoder + Ord, V: Decoder> Decoder for BTreeMap<K, V> {
 
 impl<K: Unpacker + Ord, V: Unpacker> Unpacker for BTreeMap<K, V> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
-        if reader.remaining() == 0 {
-            return Err(EncoderError::InsufficientData);
-        }
-        let tag = reader.get_u8();
-        if tag != TAG_MAP {
-            return Err(EncoderError::Decode(format!(
-                "Expected Map tag ({}), got {}",
-                TAG_MAP, tag
-            )));
-        }
-        let len = usize::unpack(reader)?;
+        let len = read_map_header(reader)?;
         let mut map = BTreeMap::new();
         for _ in 0..len {
             let k = K::unpack(reader)?;
@@ -2063,7 +2009,7 @@ impl Packer for Bytes {
     fn pack(&self, writer: &mut BytesMut) -> Result<()> {
         writer.put_u8(TAG_BINARY);
         let len = self.len();
-        len.pack(writer)?;
+        len.encode(writer)?;
         writer.put_slice(self);
         Ok(())
     }
@@ -2261,7 +2207,11 @@ pub(crate) fn encode_vec_length(len: usize, writer: &mut BytesMut) -> Result<()>
 
 /// Decodes the length for array/vec/set format.
 #[inline(never)]
-pub(crate) fn decode_vec_length(tag: u8, reader: &mut Bytes) -> Result<usize> {
+pub(crate) fn decode_vec_length(reader: &mut Bytes) -> Result<usize> {
+    if reader.remaining() == 0 {
+        return Err(EncoderError::InsufficientData);
+    }
+    let tag = reader.get_u8();
     if (TAG_ARRAY_VEC_SET_BASE..TAG_ARRAY_VEC_SET_LONG).contains(&tag) {
         Ok((tag - TAG_ARRAY_VEC_SET_BASE) as usize)
     } else if tag == TAG_ARRAY_VEC_SET_LONG {
@@ -2272,4 +2222,23 @@ pub(crate) fn decode_vec_length(tag: u8, reader: &mut Bytes) -> Result<usize> {
             TAG_ARRAY_VEC_SET_BASE, TAG_ARRAY_VEC_SET_LONG, tag
         )))
     }
+}
+
+/// Reads and validates TAG_MAP, then returns the map length.
+///
+/// This helper function is used by all map-like types (HashMap, BTreeMap, etc.)
+/// to avoid code duplication in decode/unpack implementations.
+#[inline(never)]
+pub(crate) fn read_map_header(reader: &mut Bytes) -> Result<usize> {
+    if reader.remaining() == 0 {
+        return Err(EncoderError::InsufficientData);
+    }
+    let tag = reader.get_u8();
+    if tag != TAG_MAP {
+        return Err(EncoderError::Decode(format!(
+            "Expected Map tag ({}), got {}",
+            TAG_MAP, tag
+        )));
+    }
+    usize::decode(reader)
 }

@@ -7,6 +7,19 @@
 //! - Custom derive macros for ergonomic usage
 //! - Feature-gated support for optional dependencies
 //!
+//! ## Binary Format
+//!
+//! This library uses magic numbers to distinguish between different serialization formats:
+//! - **Encode format**: Starts with magic number `0xA55A` (2 bytes, little-endian)
+//!   - Used by `encode()` and `encode_to()` functions
+//!   - Supports schema evolution with field IDs and type tags
+//! - **Pack format**: Starts with magic number `0xDADA` (2 bytes, little-endian)
+//!   - Used by `pack()` and `pack_to()` functions
+//!   - Compact format without schema evolution support
+//!
+//! Magic numbers are only added when using the convenience functions in this library.
+//! Direct trait method calls (`Encoder::encode`, `Packer::pack`) do not include magic numbers.
+//!
 //! ## Attribute Macros
 //!
 //! You can control encoding/decoding behavior using the following attributes:
@@ -138,9 +151,16 @@ pub enum EnumDecodeError {
     },
 }
 
+/// Magic number for encoded format (0xA55A in little-endian)
+const ENCODE_MAGIC: u16 = 0xA55A;
+
+/// Magic number for packed format (0xDADA in little-endian)
+const PACK_MAGIC: u16 = 0xDADA;
+
 /// Convenience function to decode a value from bytes.
 ///
-/// This is equivalent to calling `T::decode(reader)` but provides a more ergonomic API.
+/// This function expects and verifies the encode magic number (0xA55A) at the beginning of the data.
+/// It provides schema evolution support through field IDs and type tags.
 ///
 /// # Arguments
 /// * `reader` - The buffer to read the encoded bytes from.
@@ -162,16 +182,26 @@ pub enum EnumDecodeError {
 /// assert_eq!(value, decoded);
 /// ```
 pub fn decode<T: Decoder>(reader: &mut Bytes) -> Result<T> {
+    if reader.remaining() < 2 {
+        return Err(EncoderError::InsufficientData);
+    }
+    let magic = reader.get_u16_le();
+    if magic != ENCODE_MAGIC {
+        return Err(EncoderError::Decode(format!(
+            "Invalid encode magic number: expected 0x{:04X}, got 0x{:04X}",
+            ENCODE_MAGIC, magic
+        )));
+    }
     T::decode(reader)
 }
 
-/// Convenience function to encode a value to bytes.
+/// Convenience function to encode a value to bytes with magic number.
 ///
-/// This is equivalent to calling `value.encode(writer)` but provides a more ergonomic API.
+/// This function adds the encode magic number (0xA55A) at the beginning of the data
+/// and provides schema evolution support through field IDs and type tags.
 ///
 /// # Arguments
 /// * `value` - The value to encode.
-/// * `writer` - The buffer to write the encoded bytes into.
 ///
 /// # Example
 /// ```rust
@@ -191,8 +221,41 @@ pub fn decode<T: Decoder>(reader: &mut Bytes) -> Result<T> {
 /// ```
 pub fn encode<T: Encoder>(value: &T) -> Result<Bytes> {
     let mut writer = BytesMut::new();
+    writer.put_u16_le(ENCODE_MAGIC);
     value.encode(&mut writer)?;
     Ok(writer.freeze())
+}
+
+/// Convenience function to encode a value to an existing BytesMut buffer with magic number.
+///
+/// This function adds the encode magic number (0xA55A) at the current position in the buffer
+/// and provides schema evolution support through field IDs and type tags.
+///
+/// # Arguments
+/// * `value` - The value to encode.
+/// * `writer` - The buffer to write the encoded bytes into.
+///
+/// # Example
+/// ```rust
+/// use senax_encoder::{encode_to, decode, Encode, Decode};
+/// use bytes::{BytesMut, Bytes};
+///
+/// #[derive(Encode, Decode, PartialEq, Debug)]
+/// struct MyStruct {
+///     id: u32,
+///     name: String,
+/// }
+///
+/// let value = MyStruct { id: 42, name: "hello".to_string() };
+/// let mut buf = BytesMut::new();
+/// encode_to(&value, &mut buf).unwrap();
+/// let mut data = buf.freeze();
+/// let decoded: MyStruct = decode(&mut data).unwrap();
+/// assert_eq!(value, decoded);
+/// ```
+pub fn encode_to<T: Encoder>(value: &T, writer: &mut BytesMut) -> Result<()> {
+    writer.put_u16_le(ENCODE_MAGIC);
+    value.encode(writer)
 }
 
 /// Trait for types that can be encoded into the senax binary format.
@@ -271,9 +334,9 @@ pub trait Unpacker: Sized {
     fn unpack(reader: &mut Bytes) -> Result<Self>;
 }
 
-/// Convenience function to pack a value to bytes.
+/// Convenience function to pack a value to bytes with magic number.
 ///
-/// This is equivalent to calling `value.pack(writer)` but provides a more ergonomic API.
+/// This function adds the pack magic number (0xDADA) at the beginning of the data.
 /// The packed format is compact but not schema-evolution-friendly.
 ///
 /// # Arguments
@@ -297,13 +360,46 @@ pub trait Unpacker: Sized {
 /// ```
 pub fn pack<T: Packer>(value: &T) -> Result<Bytes> {
     let mut writer = BytesMut::new();
+    writer.put_u16_le(PACK_MAGIC);
     value.pack(&mut writer)?;
     Ok(writer.freeze())
 }
 
+/// Convenience function to pack a value to an existing BytesMut buffer with magic number.
+///
+/// This function adds the pack magic number (0xDADA) at the current position in the buffer.
+/// The packed format is compact but not schema-evolution-friendly.
+///
+/// # Arguments
+/// * `value` - The value to pack.
+/// * `writer` - The buffer to write the packed bytes into.
+///
+/// # Example
+/// ```rust
+/// use senax_encoder::{pack_to, unpack, Pack, Unpack};
+/// use bytes::{BytesMut, Bytes};
+///
+/// #[derive(Pack, Unpack, PartialEq, Debug)]
+/// struct MyStruct {
+///     id: u32,
+///     name: String,
+/// }
+///
+/// let value = MyStruct { id: 42, name: "hello".to_string() };
+/// let mut buf = BytesMut::new();
+/// pack_to(&value, &mut buf).unwrap();
+/// let mut data = buf.freeze();
+/// let decoded: MyStruct = unpack(&mut data).unwrap();
+/// assert_eq!(value, decoded);
+/// ```
+pub fn pack_to<T: Packer>(value: &T, writer: &mut BytesMut) -> Result<()> {
+    writer.put_u16_le(PACK_MAGIC);
+    value.pack(writer)
+}
+
 /// Convenience function to unpack a value from bytes.
 ///
-/// This is equivalent to calling `T::unpack(reader)` but provides a more ergonomic API.
+/// This function expects and verifies the pack magic number (0xDADA) at the beginning of the data.
 /// The packed format is compact but not schema-evolution-friendly.
 ///
 /// # Arguments
@@ -326,5 +422,15 @@ pub fn pack<T: Packer>(value: &T) -> Result<Bytes> {
 /// assert_eq!(value, decoded);
 /// ```
 pub fn unpack<T: Unpacker>(reader: &mut Bytes) -> Result<T> {
+    if reader.remaining() < 2 {
+        return Err(EncoderError::InsufficientData);
+    }
+    let magic = reader.get_u16_le();
+    if magic != PACK_MAGIC {
+        return Err(EncoderError::Decode(format!(
+            "Invalid pack magic number: expected 0x{:04X}, got 0x{:04X}",
+            PACK_MAGIC, magic
+        )));
+    }
     T::unpack(reader)
 }

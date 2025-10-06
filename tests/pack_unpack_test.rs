@@ -270,10 +270,11 @@ fn test_primitive_pack_unpack() {
     assert_eq!(bool_val, unpacked_bool);
 
     // Test bool unpack with non-standard values (should work with any non-zero)
+    // Use trait method directly since we're testing raw binary data without magic number
     let mut writer = bytes::BytesMut::new();
     writer.put_u8(42); // Non-standard true value
     let mut reader = writer.freeze();
-    let unpacked_bool: bool = unpack(&mut reader).unwrap();
+    let unpacked_bool: bool = bool::unpack(&mut reader).unwrap();
     assert_eq!(true, unpacked_bool);
 
     // Test f32 without tag
@@ -382,6 +383,137 @@ fn test_datetime_default_and_non_default_pack_unpack() {
             original_local
         );
     }
+}
+
+#[test]
+#[cfg(feature = "chrono")]
+fn test_naive_datetime_pack_unpack() {
+    use chrono::{DateTime, NaiveDateTime};
+
+    // Test NaiveDateTime
+    let naive_dt = DateTime::from_timestamp(1640995200, 123456789)
+        .unwrap()
+        .naive_utc();
+    let packed_naive = pack(&naive_dt).unwrap();
+    let mut reader = packed_naive;
+    let unpacked_naive: NaiveDateTime = unpack(&mut reader).unwrap();
+    assert_eq!(naive_dt, unpacked_naive);
+}
+
+#[test]
+#[cfg(feature = "chrono")]
+fn test_naive_datetime_default_and_non_default_pack_unpack() {
+    use chrono::{DateTime, NaiveDateTime};
+
+    // Test default NaiveDateTime (should use TAG_NONE)
+    let default_naive = NaiveDateTime::default();
+    let packed_default_naive = pack(&default_naive).unwrap();
+    let mut reader = packed_default_naive;
+    let unpacked_default_naive: NaiveDateTime = unpack(&mut reader).unwrap();
+    assert_eq!(default_naive, unpacked_default_naive);
+
+    // Test non-default NaiveDateTime (should use TAG_CHRONO_NAIVE_DATETIME)
+    let non_default_naive = DateTime::from_timestamp(1640995200, 123456789)
+        .unwrap()
+        .naive_utc();
+    let packed_non_default_naive = pack(&non_default_naive).unwrap();
+    let mut reader = packed_non_default_naive;
+    let unpacked_non_default_naive: NaiveDateTime = unpack(&mut reader).unwrap();
+    assert_eq!(non_default_naive, unpacked_non_default_naive);
+
+    // Test various NaiveDateTime values
+    let test_datetimes = vec![
+        DateTime::from_timestamp(0, 0).unwrap().naive_utc(), // Unix epoch
+        DateTime::from_timestamp(1234567890, 0).unwrap().naive_utc(), // 2009-02-13
+        DateTime::from_timestamp(1640995200, 123456789)
+            .unwrap()
+            .naive_utc(), // 2022-01-01 with nanos
+        DateTime::from_timestamp(-1, 999999999).unwrap().naive_utc(), // Before epoch
+        DateTime::from_timestamp(2147483647, 999999999)
+            .unwrap()
+            .naive_utc(), // Year 2038 problem
+    ];
+
+    for &original_naive in &test_datetimes {
+        let packed_naive = pack(&original_naive).unwrap();
+        let mut reader = packed_naive;
+        let unpacked_naive: NaiveDateTime = unpack(&mut reader).unwrap();
+        assert_eq!(
+            original_naive, unpacked_naive,
+            "Failed for NaiveDateTime: {}",
+            original_naive
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "chrono")]
+fn test_naive_datetime_encode_decode() {
+    use bytes::BytesMut;
+    use chrono::{DateTime, NaiveDateTime};
+    use senax_encoder::{Decoder, Encoder};
+
+    let test_datetimes = vec![
+        NaiveDateTime::default(),
+        DateTime::from_timestamp(0, 0).unwrap().naive_utc(),
+        DateTime::from_timestamp(1640995200, 123456789)
+            .unwrap()
+            .naive_utc(),
+        DateTime::from_timestamp(-1, 999999999).unwrap().naive_utc(),
+        DateTime::from_timestamp(2147483647, 999999999)
+            .unwrap()
+            .naive_utc(),
+    ];
+
+    for &original in &test_datetimes {
+        let mut buffer = BytesMut::new();
+        original.encode(&mut buffer).unwrap();
+
+        let mut reader = buffer.freeze();
+        let decoded = NaiveDateTime::decode(&mut reader).unwrap();
+
+        assert_eq!(
+            original, decoded,
+            "Failed encode/decode for NaiveDateTime: {}",
+            original
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "chrono")]
+fn test_naive_datetime_in_struct() {
+    use chrono::{DateTime, NaiveDateTime};
+    use senax_encoder::decode;
+
+    #[derive(Encode, Decode, Pack, Unpack, PartialEq, Debug)]
+    struct EventStruct {
+        id: u32,
+        name: String,
+        event_time: NaiveDateTime,
+        optional_time: Option<NaiveDateTime>,
+    }
+
+    let original = EventStruct {
+        id: 42,
+        name: "Test Event".to_string(),
+        event_time: DateTime::from_timestamp(1640995200, 123456789)
+            .unwrap()
+            .naive_utc(),
+        optional_time: Some(DateTime::from_timestamp(1641000000, 0).unwrap().naive_utc()),
+    };
+
+    // Test pack/unpack
+    let packed_bytes = pack(&original).unwrap();
+    let mut reader = packed_bytes;
+    let unpacked: EventStruct = unpack(&mut reader).unwrap();
+    assert_eq!(original, unpacked);
+
+    // Test encode/decode
+    let encoded_bytes = encode(&original).unwrap();
+    let mut reader = encoded_bytes;
+    let decoded: EventStruct = decode(&mut reader).unwrap();
+    assert_eq!(original, decoded);
 }
 
 #[test]
