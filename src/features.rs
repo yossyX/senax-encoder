@@ -10,6 +10,8 @@ use fxhash::{FxHashMap, FxHashSet};
 use indexmap::{IndexMap, IndexSet};
 #[cfg(feature = "rust_decimal")]
 use rust_decimal::Decimal;
+#[cfg(feature = "raw_value")]
+use serde_json::value::RawValue;
 #[cfg(feature = "serde_json")]
 use serde_json::{Map, Number, Value};
 #[cfg(feature = "smol_str")]
@@ -1144,6 +1146,71 @@ impl Decoder for SmolStr {
 }
 #[cfg(feature = "smol_str")]
 impl Unpacker for SmolStr {
+    fn unpack(reader: &mut Bytes) -> Result<Self> {
+        Self::decode(reader)
+    }
+}
+
+// --- Box<serde_json::value::RawValue> ---
+#[cfg(feature = "raw_value")]
+impl Encoder for Box<RawValue> {
+    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+        let json_str = self.get();
+        let len = json_str.len();
+        if len < (TAG_STRING_LONG - TAG_STRING_BASE) as usize {
+            writer.put_u8(TAG_STRING_BASE + len as u8);
+            writer.put_slice(json_str.as_bytes());
+        } else {
+            writer.put_u8(TAG_STRING_LONG);
+            len.encode(writer)?;
+            writer.put_slice(json_str.as_bytes());
+        }
+        Ok(())
+    }
+
+    fn is_default(&self) -> bool {
+        self.get().is_empty()
+    }
+}
+
+#[cfg(feature = "raw_value")]
+impl Packer for Box<RawValue> {
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+        self.encode(writer)
+    }
+}
+
+#[cfg(feature = "raw_value")]
+impl Decoder for Box<RawValue> {
+    fn decode(reader: &mut Bytes) -> Result<Self> {
+        if reader.remaining() == 0 {
+            return Err(EncoderError::InsufficientData);
+        }
+        let tag = reader.get_u8();
+        let len = if (TAG_STRING_BASE..TAG_STRING_LONG).contains(&tag) {
+            (tag - TAG_STRING_BASE) as usize
+        } else if tag == TAG_STRING_LONG {
+            usize::decode(reader)?
+        } else {
+            return Err(EncoderError::Decode(format!(
+                "Expected String tag ({}..={}), got {}",
+                TAG_STRING_BASE, TAG_STRING_LONG, tag
+            )));
+        };
+        if reader.remaining() < len {
+            return Err(EncoderError::InsufficientData);
+        }
+        let mut bytes = vec![0u8; len];
+        if len > 0 {
+            reader.copy_to_slice(&mut bytes);
+        }
+        let string = String::from_utf8(bytes).map_err(|e| EncoderError::Decode(e.to_string()))?;
+        RawValue::from_string(string).map_err(|e| EncoderError::Decode(e.to_string()))
+    }
+}
+
+#[cfg(feature = "raw_value")]
+impl Unpacker for Box<RawValue> {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         Self::decode(reader)
     }

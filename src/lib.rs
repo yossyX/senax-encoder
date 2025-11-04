@@ -3,7 +3,7 @@
 //! A fast, compact, and schema-evolution-friendly binary serialization library for Rust.
 //!
 //! - Supports struct/enum encoding with field/variant IDs for forward/backward compatibility
-//! - Efficient encoding for primitives, collections, Option, String, bytes, and popular crates (chrono, uuid, ulid, rust_decimal, indexmap, fxhash, ahash, smol_str)
+//! - Efficient encoding for primitives, collections, Option, String, bytes, and popular crates (chrono, uuid, ulid, rust_decimal, indexmap, fxhash, ahash, smol_str, serde_json)
 //! - Custom derive macros for ergonomic usage
 //! - Feature-gated support for optional dependencies
 //!
@@ -45,6 +45,7 @@
 //! - `ahash` — Enables encoding/decoding of `ahash::AHashMap` and `ahash::AHashSet` (high-performance hash collections).
 //! - `smol_str` — Enables encoding/decoding of `smol_str::SmolStr` (small string optimization).
 //! - `serde_json` — Enables encoding/decoding of `serde_json::Value` (JSON values as dynamic type).
+//! - `raw_value` — Enables encoding/decoding of `Box<serde_json::value::RawValue>` (raw JSON strings). Requires `serde_json` feature.
 
 pub mod core;
 mod features;
