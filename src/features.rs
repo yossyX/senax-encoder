@@ -1,5 +1,7 @@
 #[cfg(feature = "ahash")]
 use ahash::{AHashMap, AHashSet};
+#[cfg(feature = "bigdecimal")]
+use bigdecimal::{BigDecimal, Zero};
 #[allow(unused_imports)]
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 #[cfg(feature = "chrono")]
@@ -545,13 +547,11 @@ impl Unpacker for NaiveDateTime {
 #[cfg(feature = "rust_decimal")]
 impl Encoder for Decimal {
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
-        writer.put_u8(TAG_DECIMAL);
-        // Get Decimal's internal representation and encode it
-        let mantissa = self.mantissa();
-        let scale = self.scale();
-        mantissa.encode(writer)?;
-        scale.encode(writer)?;
-        Ok(())
+        // Convert to string and encode as STRING
+        // Note: Pack/Unpack still uses binary format for efficiency.
+        // The string format provides better compatibility and readability for Encode/Decode.
+        let s = self.to_string();
+        s.encode(writer)
     }
 
     fn is_default(&self) -> bool {
@@ -566,15 +566,40 @@ impl Packer for Decimal {
 }
 #[cfg(feature = "rust_decimal")]
 impl Decoder for Decimal {
+    /// Decodes a Decimal from a string, legacy binary format, or i128.
+    ///
+    /// This decoder supports:
+    /// - New string format (TAG_STRING_BASE..TAG_STRING_LONG)
+    /// - Legacy binary format (TAG_DECIMAL + mantissa + scale)
+    /// - i128 cross-decode (TAG_ZERO..TAG_U128, TAG_NEGATIVE)
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
         }
-        let tag = reader.get_u8();
+
+        // Peek at the tag to determine format
+        let tag = reader.chunk()[0];
+
+        // Try string format first (new format)
+        if (TAG_STRING_BASE..=TAG_STRING_LONG).contains(&tag) {
+            let s = String::decode(reader)?;
+            return s.parse::<Decimal>().map_err(|e| {
+                EncoderError::Decode(format!("Invalid Decimal string '{}': {}", s, e))
+            });
+        }
+
+        // Try i128 cross-decode
+        if tag == TAG_NEGATIVE || (TAG_ZERO..=TAG_U128).contains(&tag) {
+            let i128_val = i128::decode(reader)?;
+            return Ok(Decimal::from(i128_val));
+        }
+
+        // Fall back to legacy binary format for backward compatibility
+        reader.advance(1); // consume the tag
         if tag != TAG_DECIMAL {
             return Err(EncoderError::Decode(format!(
-                "Expected Decimal tag ({}), got {}",
-                TAG_DECIMAL, tag
+                "Expected Decimal string ({}..={}), binary tag ({}), or integer tag, got {}",
+                TAG_STRING_BASE, TAG_STRING_LONG, TAG_DECIMAL, tag
             )));
         }
         let mantissa = i128::decode(reader)?;
@@ -590,6 +615,59 @@ impl Decoder for Decimal {
 }
 #[cfg(feature = "rust_decimal")]
 impl Unpacker for Decimal {
+    fn unpack(reader: &mut Bytes) -> Result<Self> {
+        Self::decode(reader)
+    }
+}
+
+// --- BigDecimal ---
+#[cfg(feature = "bigdecimal")]
+impl Encoder for BigDecimal {
+    fn encode(&self, writer: &mut BytesMut) -> Result<()> {
+        // Convert to scientific notation string and encode as STRING
+        let s = self.to_scientific_notation();
+        s.encode(writer)
+    }
+
+    fn is_default(&self) -> bool {
+        self.is_zero()
+    }
+}
+#[cfg(feature = "bigdecimal")]
+impl Packer for BigDecimal {
+    fn pack(&self, writer: &mut BytesMut) -> Result<()> {
+        self.encode(writer)
+    }
+}
+#[cfg(feature = "bigdecimal")]
+impl Decoder for BigDecimal {
+    /// Decodes a BigDecimal from a string or i128.
+    ///
+    /// This decoder supports:
+    /// - String format (TAG_STRING_BASE..TAG_STRING_LONG)
+    /// - i128 cross-decode (TAG_ZERO..TAG_U128, TAG_NEGATIVE)
+    fn decode(reader: &mut Bytes) -> Result<Self> {
+        if reader.remaining() == 0 {
+            return Err(EncoderError::InsufficientData);
+        }
+
+        // Peek at the tag to determine format
+        let tag = reader.chunk()[0];
+
+        // Try i128 cross-decode first
+        if tag == TAG_NEGATIVE || (TAG_ZERO..=TAG_U128).contains(&tag) {
+            let i128_val = i128::decode(reader)?;
+            return Ok(BigDecimal::from(i128_val));
+        }
+
+        // Fall back to string format
+        let s = String::decode(reader)?;
+        s.parse::<BigDecimal>()
+            .map_err(|e| EncoderError::Decode(format!("Invalid BigDecimal string '{}': {}", s, e)))
+    }
+}
+#[cfg(feature = "bigdecimal")]
+impl Unpacker for BigDecimal {
     fn unpack(reader: &mut Bytes) -> Result<Self> {
         Self::decode(reader)
     }

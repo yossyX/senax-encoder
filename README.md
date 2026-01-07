@@ -5,13 +5,13 @@
 A fast, compact, and schema-evolution-friendly binary serialization library for Rust.
 
 - Supports struct/enum encoding with field/variant IDs for forward/backward compatibility
-- Efficient encoding for primitives, collections, Option, String, bytes, and popular crates (chrono, uuid, ulid, rust_decimal, indexmap, fxhash, ahash, smol_str, serde_json)
+- Efficient encoding for primitives, collections, Option, String, bytes, and popular crates (chrono, uuid, ulid, rust_decimal, bigdecimal, indexmap, fxhash, ahash, smol_str, serde_json)
 - Custom derive macros for ergonomic usage
 - Feature-gated support for optional dependencies
 
 ## Features
 
-- Compact, efficient encoding for a wide range of types (primitives, collections, Option, String, bytes, chrono, uuid, ulid, rust_decimal, indexmap, serde_json)
+- Compact, efficient encoding for a wide range of types (primitives, collections, Option, String, bytes, chrono, uuid, ulid, rust_decimal, bigdecimal, indexmap, serde_json)
 - Schema evolution and version compatibility via field/variant IDs and tag-based format
 - Attribute macros for fine-grained control (custom IDs, default values, skip encode/decode, renaming, compact ID encoding)
 - Feature flags for optional support of popular crates
@@ -21,12 +21,42 @@ A fast, compact, and schema-evolution-friendly binary serialization library for 
 
 You can control encoding/decoding behavior using the following attributes:
 
+### Container-level attributes (struct/enum level):
+- `#[senax(disable_encode)]` — Generates stub implementations (unimplemented!) for `Encode` and `Decode` traits. Useful for improving build efficiency during development when you're not yet ready to fully implement serialization.
+- `#[senax(disable_pack)]` — Generates stub implementations (unimplemented!) for `Pack` and `Unpack` traits. Can be combined with `disable_encode`.
+
+### Field-level attributes:
 - `#[senax(id = N)]` — Assigns a custom field or variant ID (u64). Ensures stable wire format across versions.
 - `#[senax(default)]` — If a field is missing during decoding, its value is set to `Default::default()` instead of causing an error. For `Option<T>`, this means `None`.
 - `#[senax(skip_encode)]` — This field is not written during encoding. On decode, it is set to `Default::default()`.
 - `#[senax(skip_decode)]` — This field is ignored during decoding and always set to `Default::default()`. It is still encoded if present.
 - `#[senax(skip_default)]` — This field is not written during encoding if its value equals the default value. On decode, missing fields are set to `Default::default()`.
 - `#[senax(rename = "name")]` — Use the given string as the logical field/variant name for ID calculation. Useful for renaming fields/variants while keeping the same wire format.
+
+### Example: Development-time stubs
+```rust
+// Disable Encode/Decode during development
+#[derive(Encode, Decode)]
+#[senax(disable_encode)]
+struct WorkInProgress {
+    #[senax(id=1)]
+    field1: i32,
+}
+
+// Disable Pack/Unpack only
+#[derive(Pack, Unpack)]
+#[senax(disable_pack)]
+struct AnotherStruct {
+    field1: i32,
+}
+
+// Disable both
+#[derive(Encode, Decode, Pack, Unpack)]
+#[senax(disable_encode, disable_pack)]
+struct AllDisabled {
+    field1: i32,
+}
+```
 
 ## Feature Flags
 
@@ -37,6 +67,7 @@ The following optional features enable support for popular crates and types:
 - `uuid` — Enables encoding/decoding of `uuid::Uuid`.
 - `ulid` — Enables encoding/decoding of `ulid::Ulid` (shares the same tag as UUID for binary compatibility).
 - `rust_decimal` — Enables encoding/decoding of `rust_decimal::Decimal`.
+- `bigdecimal` — Enables encoding/decoding of `bigdecimal::BigDecimal` (stored as scientific notation string).
 - `indexmap` — Enables encoding/decoding of `IndexMap` and `IndexSet` collections.
 - `fxhash` — Enables encoding/decoding of `fxhash::FxHashMap` and `fxhash::FxHashSet` (fast hash collections).
 - `ahash` — Enables encoding/decoding of `ahash::AHashMap` and `ahash::AHashSet` (high-performance hash collections).
@@ -130,6 +161,7 @@ When respective features are enabled:
 - **uuid**: `Uuid`
 - **ulid**: `Ulid`
 - **rust_decimal**: `Decimal`
+- **bigdecimal**: `BigDecimal` (stored as scientific notation string)
 - **indexmap**: `IndexMap`, `IndexSet`
 - **fxhash**: `FxHashMap`, `FxHashSet` (fast hash collections)
 - **ahash**: `AHashMap`, `AHashSet` (high-performance hash collections)
@@ -146,14 +178,17 @@ The senax-encoder supports automatic type conversion for compatible types during
 - **Signed integers**: Can be decoded as larger signed integers if the value fits within the target range
 - **Unsigned to signed**: Supported if the value fits within the signed type's positive range
 - **Floating point**: `f64` can be decoded as `f32` (with potential precision loss)
+- **Float cross-decoding**: `f32` ↔ `f64` (bidirectional since v0.2.2 with string format)
+- **Integer to float**: Any integer type (including `i128`) can be decoded as `f32` or `f64`
+- **Integer to decimal**: Any integer type can be decoded as `rust_decimal::Decimal` or `bigdecimal::BigDecimal`
 - **Container expansion**: `T` can be decoded as `Option<T>`
 
 ### ❌ Unsupported Cross-Type Decoding
 
-- **f32 to f64**: Not supported due to precision ambiguity. Use consistent float types or handle conversion manually.
 - **Signed to unsigned**: Negative values cannot be decoded as unsigned types
 - **Integer overflow**: Values too large for the target type will cause decode errors
 - **Container shrinking**: `Option<T>` cannot be automatically decoded as `T` (use explicit handling)
+- **Float to integer**: Floating-point values cannot be decoded as integer types
 
 ### ⚠️ Important Notes
 

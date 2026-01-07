@@ -154,6 +154,83 @@ struct FieldAttributes {
     rename: Option<String>,
 }
 
+/// Container attributes parsed from `#[senax(...)]` annotations at struct/enum level
+///
+/// This struct represents attributes that can be applied to the entire struct or enum.
+///
+/// # Fields
+///
+/// * `disable_encode` - Whether to generate stub implementations for Encode/Decode traits
+/// * `disable_pack` - Whether to generate stub implementations for Pack/Unpack traits
+#[derive(Debug, Clone, Default)]
+struct ContainerAttributes {
+    disable_encode: bool,
+    disable_pack: bool,
+}
+
+/// Extract and parse `#[senax(...)]` attribute values from container (struct/enum) attributes
+///
+/// This function parses the senax attributes applied to a struct or enum and returns
+/// a `ContainerAttributes` struct containing all the parsed values.
+///
+/// # Arguments
+///
+/// * `attrs` - The attributes array from the struct/enum
+///
+/// # Returns
+///
+/// A `ContainerAttributes` struct with parsed values.
+///
+/// # Supported Attributes
+///
+/// * `#[senax(disable_encode)]` - Generate stub implementations for Encode/Decode traits (unimplemented!() only)
+/// * `#[senax(disable_pack)]` - Generate stub implementations for Pack/Unpack traits (unimplemented!() only)
+fn get_container_attributes(attrs: &[Attribute]) -> ContainerAttributes {
+    let mut disable_encode = false;
+    let mut disable_pack = false;
+
+    for attr in attrs {
+        if attr.path().is_ident("senax") {
+            let parsed = attr.parse_args_with(|input: syn::parse::ParseStream| {
+                let mut parsed_disable_encode = false;
+                let mut parsed_disable_pack = false;
+
+                while !input.is_empty() {
+                    let ident = input.parse::<syn::Ident>()?;
+
+                    if ident == "disable_encode" {
+                        parsed_disable_encode = true;
+                    } else if ident == "disable_pack" {
+                        parsed_disable_pack = true;
+                    } else {
+                        return Err(syn::Error::new(
+                            ident.span(),
+                            format!("Unknown container attribute: {}", ident),
+                        ));
+                    }
+
+                    // Consume comma if present, otherwise end
+                    if input.peek(syn::Token![,]) {
+                        input.parse::<syn::Token![,]>()?;
+                    }
+                }
+
+                Ok((parsed_disable_encode, parsed_disable_pack))
+            });
+
+            if let Ok((parsed_disable_encode, parsed_disable_pack)) = parsed {
+                disable_encode = disable_encode || parsed_disable_encode;
+                disable_pack = disable_pack || parsed_disable_pack;
+            }
+        }
+    }
+
+    ContainerAttributes {
+        disable_encode,
+        disable_pack,
+    }
+}
+
 /// Extract and parse `#[senax(...)]` attribute values from field attributes
 ///
 /// This function parses the senax attributes applied to a field and returns
@@ -345,6 +422,10 @@ fn extract_inner_type_from_option(ty: &Type) -> Option<&Type> {
 ///
 /// # Supported Attributes
 ///
+/// ## Container-level attributes:
+/// * `#[senax(disable_encode)]` - Generate stub implementation (unimplemented!() only) for Encode/Decode
+///
+/// ## Field-level attributes:
 /// * `#[senax(id=N)]` - Set explicit field/variant ID
 /// * `#[senax(skip_encode)]` - Skip field during encoding
 /// * `#[senax(rename="name")]` - Use alternative name for ID calculation
@@ -359,12 +440,36 @@ fn extract_inner_type_from_option(ty: &Type) -> Option<&Type> {
 ///     #[senax(skip_encode)]
 ///     field2: String,
 /// }
+///
+/// // Stub implementation for faster compilation during development
+/// #[derive(Encode, Decode)]
+/// #[senax(disable_encode)]
+/// struct UnfinishedStruct {
+///     #[senax(id=1)]
+///     field1: i32,
+/// }
 /// ```
 #[proc_macro_derive(Encode, attributes(senax))]
 pub fn derive_encode(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    // Check for container-level disable_encode attribute
+    let container_attrs = get_container_attributes(&input.attrs);
+    if container_attrs.disable_encode {
+        return TokenStream::from(quote! {
+            impl #impl_generics senax_encoder::Encoder for #name #ty_generics #where_clause {
+                fn encode(&self, _writer: &mut bytes::BytesMut) -> senax_encoder::Result<()> {
+                    unimplemented!("Encode trait is disabled for {}", stringify!(#name))
+                }
+
+                fn is_default(&self) -> bool {
+                    unimplemented!("Encode trait is disabled for {}", stringify!(#name))
+                }
+            }
+        });
+    }
 
     let mut default_variant_checks = Vec::new();
 
@@ -650,6 +755,10 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
 ///
 /// # Supported Attributes
 ///
+/// ## Container-level attributes:
+/// * `#[senax(disable_encode)]` - Generate stub implementation (unimplemented!() only) for Encode/Decode
+///
+/// ## Field-level attributes:
 /// * `#[senax(id=N)]` - Set explicit field/variant ID
 /// * `#[senax(default)]` - Use default value if field is missing
 /// * `#[senax(skip_decode)]` - Skip field during decoding (use default value)
@@ -668,12 +777,32 @@ pub fn derive_encode(input: TokenStream) -> TokenStream {
 ///     #[senax(skip_decode)]
 ///     field3: bool,
 /// }
+///
+/// // Stub implementation for faster compilation during development
+/// #[derive(Encode, Decode)]
+/// #[senax(disable_encode)]
+/// struct UnfinishedStruct {
+///     #[senax(id=1)]
+///     field1: i32,
+/// }
 /// ```
 #[proc_macro_derive(Decode, attributes(senax))]
 pub fn derive_decode(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    // Check for container-level disable_encode attribute
+    let container_attrs = get_container_attributes(&input.attrs);
+    if container_attrs.disable_encode {
+        return TokenStream::from(quote! {
+            impl #impl_generics senax_encoder::Decoder for #name #ty_generics #where_clause {
+                fn decode(_reader: &mut bytes::Bytes) -> senax_encoder::Result<Self> {
+                    unimplemented!("Decode trait is disabled for {}", stringify!(#name))
+                }
+            }
+        });
+    }
 
     let decode_fields = match &input.data {
         Data::Struct(s) => match &s.fields {
@@ -1096,6 +1225,11 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
 /// This procedural macro automatically generates an implementation of the `Packer` trait
 /// for structs and enums. It provides compact serialization without field IDs for structs.
 ///
+/// # Supported Attributes
+///
+/// ## Container-level attributes:
+/// * `#[senax(disable_pack)]` - Generate stub implementation (unimplemented!() only) for Pack/Unpack
+///
 /// # Examples
 ///
 /// ```rust
@@ -1104,12 +1238,31 @@ pub fn derive_decode(input: TokenStream) -> TokenStream {
 ///     field1: i32,
 ///     field2: String,
 /// }
+///
+/// // Stub implementation for faster compilation during development
+/// #[derive(Pack, Unpack)]
+/// #[senax(disable_pack)]
+/// struct UnfinishedStruct {
+///     field1: i32,
+/// }
 /// ```
 #[proc_macro_derive(Pack, attributes(senax))]
 pub fn derive_pack(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    // Check for container-level disable_pack attribute
+    let container_attrs = get_container_attributes(&input.attrs);
+    if container_attrs.disable_pack {
+        return TokenStream::from(quote! {
+            impl #impl_generics senax_encoder::Packer for #name #ty_generics #where_clause {
+                fn pack(&self, _writer: &mut bytes::BytesMut) -> senax_encoder::Result<()> {
+                    unimplemented!("Pack trait is disabled for {}", stringify!(#name))
+                }
+            }
+        });
+    }
 
     // Generate structure information and CRC64 hash for pack format
     let structure_info = generate_structure_info(&input);
@@ -1244,6 +1397,11 @@ pub fn derive_pack(input: TokenStream) -> TokenStream {
 /// This procedural macro automatically generates an implementation of the `Unpacker` trait
 /// for structs and enums. It provides compact deserialization that matches the Pack format.
 ///
+/// # Supported Attributes
+///
+/// ## Container-level attributes:
+/// * `#[senax(disable_pack)]` - Generate stub implementation (unimplemented!() only) for Pack/Unpack
+///
 /// # Examples
 ///
 /// ```rust
@@ -1252,12 +1410,31 @@ pub fn derive_pack(input: TokenStream) -> TokenStream {
 ///     field1: i32,
 ///     field2: String,
 /// }
+///
+/// // Stub implementation for faster compilation during development
+/// #[derive(Pack, Unpack)]
+/// #[senax(disable_pack)]
+/// struct UnfinishedStruct {
+///     field1: i32,
+/// }
 /// ```
 #[proc_macro_derive(Unpack, attributes(senax))]
 pub fn derive_unpack(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    // Check for container-level disable_pack attribute
+    let container_attrs = get_container_attributes(&input.attrs);
+    if container_attrs.disable_pack {
+        return TokenStream::from(quote! {
+            impl #impl_generics senax_encoder::Unpacker for #name #ty_generics #where_clause {
+                fn unpack(_reader: &mut bytes::Bytes) -> senax_encoder::Result<Self> {
+                    unimplemented!("Unpack trait is disabled for {}", stringify!(#name))
+                }
+            }
+        });
+    }
 
     // Generate structure information and CRC64 hash for pack format validation
     let structure_info = generate_structure_info(&input);

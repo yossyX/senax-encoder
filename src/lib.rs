@@ -3,7 +3,7 @@
 //! A fast, compact, and schema-evolution-friendly binary serialization library for Rust.
 //!
 //! - Supports struct/enum encoding with field/variant IDs for forward/backward compatibility
-//! - Efficient encoding for primitives, collections, Option, String, bytes, and popular crates (chrono, uuid, ulid, rust_decimal, indexmap, fxhash, ahash, smol_str, serde_json)
+//! - Efficient encoding for primitives, collections, Option, String, bytes, and popular crates (chrono, uuid, ulid, rust_decimal, bigdecimal, indexmap, fxhash, ahash, smol_str, serde_json)
 //! - Custom derive macros for ergonomic usage
 //! - Feature-gated support for optional dependencies
 //!
@@ -40,6 +40,7 @@
 //! - `uuid` — Enables encoding/decoding of `uuid::Uuid`.
 //! - `ulid` — Enables encoding/decoding of `ulid::Ulid` (shares the same tag as UUID for binary compatibility).
 //! - `rust_decimal` — Enables encoding/decoding of `rust_decimal::Decimal`.
+//! - `bigdecimal` — Enables encoding/decoding of `bigdecimal::BigDecimal` (stored as scientific notation string).
 //! - `indexmap` — Enables encoding/decoding of `IndexMap` and `IndexSet` collections.
 //! - `fxhash` — Enables encoding/decoding of `fxhash::FxHashMap` and `fxhash::FxHashSet` (fast hash collections).
 //! - `ahash` — Enables encoding/decoding of `ahash::AHashMap` and `ahash::AHashSet` (high-performance hash collections).

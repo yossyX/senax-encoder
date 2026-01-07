@@ -936,12 +936,14 @@ impl Unpacker for char {
 }
 
 // --- f32/f64 ---
-/// Encodes an `f32` as a tag and 4 bytes (little-endian IEEE 754).
+/// Encodes an `f32` as a scientific notation string.
+///
+/// Note: Pack/Unpack still uses binary format for efficiency.
+/// The string format provides better compatibility and readability for Encode/Decode.
 impl Encoder for f32 {
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
-        writer.put_u8(TAG_F32);
-        writer.put_f32_le(*self);
-        Ok(())
+        let s = format!("{:e}", self);
+        s.encode(writer)
     }
 
     fn is_default(&self) -> bool {
@@ -962,13 +964,37 @@ impl Packer for f32 {
     }
 }
 
-/// Decodes an `f32` from either 4 or 8 bytes (accepts f64 for compatibility with precision loss).
+/// Decodes an `f32` from a scientific notation string, legacy binary format, or i128.
+///
+/// This decoder supports:
+/// - New string format (TAG_STRING_BASE..TAG_STRING_LONG)
+/// - Legacy binary format (TAG_F32, TAG_F64)
+/// - i128 cross-decode (TAG_ZERO..TAG_U128, TAG_NEGATIVE)
 impl Decoder for f32 {
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
         }
-        let tag = reader.get_u8();
+
+        // Peek at the tag to determine format
+        let tag = reader.chunk()[0];
+
+        // Try string format first (new format)
+        if (TAG_STRING_BASE..=TAG_STRING_LONG).contains(&tag) {
+            let s = String::decode(reader)?;
+            return s
+                .parse::<f32>()
+                .map_err(|e| EncoderError::Decode(format!("Invalid f32 string '{}': {}", s, e)));
+        }
+
+        // Try i128 cross-decode
+        if tag == TAG_NEGATIVE || (TAG_ZERO..=TAG_U128).contains(&tag) {
+            let i128_val = i128::decode(reader)?;
+            return Ok(i128_val as f32);
+        }
+
+        // Fall back to legacy binary format for backward compatibility
+        reader.advance(1); // consume the tag
         if tag == TAG_F32 {
             if reader.remaining() < 4 {
                 return Err(EncoderError::InsufficientData);
@@ -985,8 +1011,8 @@ impl Decoder for f32 {
             Ok(f64::from_le_bytes(bytes) as f32)
         } else {
             Err(EncoderError::Decode(format!(
-                "Expected f32/f64 tag ({} or {}), got {}",
-                TAG_F32, TAG_F64, tag
+                "Expected f32 string ({}..={}), binary tag ({}, {}), or integer tag, got {}",
+                TAG_STRING_BASE, TAG_STRING_LONG, TAG_F32, TAG_F64, tag
             )))
         }
     }
@@ -1017,12 +1043,14 @@ impl Unpacker for f32 {
     }
 }
 
-/// Encodes an `f64` as a tag and 8 bytes (little-endian IEEE 754).
+/// Encodes an `f64` as a scientific notation string.
+///
+/// Note: Pack/Unpack still uses binary format for efficiency.
+/// The string format provides better compatibility and readability for Encode/Decode.
 impl Encoder for f64 {
     fn encode(&self, writer: &mut BytesMut) -> Result<()> {
-        writer.put_u8(TAG_F64);
-        writer.put_f64_le(*self);
-        Ok(())
+        let s = format!("{:e}", self);
+        s.encode(writer)
     }
 
     fn is_default(&self) -> bool {
@@ -1043,13 +1071,37 @@ impl Packer for f64 {
     }
 }
 
-/// Decodes an `f64` from 8 bytes (f32 cross-decoding not supported).
+/// Decodes an `f64` from a scientific notation string, legacy binary format, or i128.
+///
+/// This decoder supports:
+/// - New string format (TAG_STRING_BASE..TAG_STRING_LONG)
+/// - Legacy binary format (TAG_F64)
+/// - i128 cross-decode (TAG_ZERO..TAG_U128, TAG_NEGATIVE)
 impl Decoder for f64 {
     fn decode(reader: &mut Bytes) -> Result<Self> {
         if reader.remaining() == 0 {
             return Err(EncoderError::InsufficientData);
         }
-        let tag = reader.get_u8();
+
+        // Peek at the tag to determine format
+        let tag = reader.chunk()[0];
+
+        // Try string format first (new format)
+        if (TAG_STRING_BASE..=TAG_STRING_LONG).contains(&tag) {
+            let s = String::decode(reader)?;
+            return s
+                .parse::<f64>()
+                .map_err(|e| EncoderError::Decode(format!("Invalid f64 string '{}': {}", s, e)));
+        }
+
+        // Try i128 cross-decode
+        if tag == TAG_NEGATIVE || (TAG_ZERO..=TAG_U128).contains(&tag) {
+            let i128_val = i128::decode(reader)?;
+            return Ok(i128_val as f64);
+        }
+
+        // Fall back to legacy binary format for backward compatibility
+        reader.advance(1); // consume the tag
         if tag == TAG_F64 {
             if reader.remaining() < 8 {
                 return Err(EncoderError::InsufficientData);
@@ -1059,8 +1111,8 @@ impl Decoder for f64 {
             Ok(f64::from_le_bytes(bytes))
         } else {
             Err(EncoderError::Decode(format!(
-                "Expected f64 tag ({}), got {}. f32 to f64 cross-decoding is not supported due to precision concerns.",
-                TAG_F64, tag
+                "Expected f64 string ({}..={}), binary tag ({}), or integer tag, got {}. f32 to f64 cross-decoding is not supported due to precision concerns.",
+                TAG_STRING_BASE, TAG_STRING_LONG, TAG_F64, tag
             )))
         }
     }

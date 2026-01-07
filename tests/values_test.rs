@@ -555,13 +555,18 @@ fn test_signed_integer_compact_encoding() {
 
 #[test]
 fn test_float_cross_decode() {
-    // f32→f64 cross-decoding is not supported
+    // f32→f64 cross-decoding is now supported (both use string format)
     let v32: f32 = 3.1415927;
     let mut buf = BytesMut::new();
     v32.encode(&mut buf).unwrap();
     let mut cur = buf.freeze();
-    let result64 = f64::decode(&mut cur);
-    assert!(result64.is_err(), "f32→f64 cross-decoding should fail");
+    let result64 = f64::decode(&mut cur).unwrap();
+    assert!(
+        (result64 - v32 as f64).abs() < 1e-6,
+        "f32→f64 cross-decode failed: {} vs {}",
+        result64,
+        v32
+    );
 
     // f64→f32 (with precision loss)
     let v64: f64 = 2.718281828459045;
